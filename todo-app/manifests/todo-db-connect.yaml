@@ -1,0 +1,63 @@
+# An iroh endpoint for reaching todo-db from a laptop with datum-connect.
+#
+# Runs `datum-connect serve` (datum-cloud/app's CLI image), which accepts
+# tunnels over iroh and forwards them to todo-db's private address. It allows
+# only [fd20:0:1::1:0:0]:5432. It has no HTTP port or URL; it dials out to
+# iroh relays, and laptops find it by its endpoint ID through iroh discovery.
+#
+# serve does not check who is calling: anyone with the endpoint ID can open a
+# TCP connection to PostgreSQL through it. PostgreSQL's own password check
+# (scram-sha-256 for the todo role) still applies. Keep the ticket private,
+# and destroy this workload when you don't need it.
+#
+# The endpoint's identity is a 32-byte ed25519 secret key in Secret
+# todo-db-connect (key "key"). Keeping it in a Secret keeps the endpoint ID,
+# and so the laptop's ticket, the same across redeploys.
+#
+# Apply with: datumctl compute deploy -f manifests/todo-db-connect.yaml
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: todo-db-connect
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Delete
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          containers:
+          - name: endpoint
+            # v0.1.5, multi-arch index digest.
+            image: ghcr.io/datum-cloud/datum-connect:v0.1.5@sha256:ef2faa17cf1fe3a32ae3f4d3fb92146170fa21168a05b1188ced7a888a0414b8
+            args:
+            - serve
+            - --listen-key-file=/secrets/todo-db-connect/key
+            - --tcp-proxy=[fd20:0:1::1:0:0]:5432
+            env:
+            - name: RUST_LOG
+              value: info
+            volumeAttachments:
+            - name: endpoint-key
+              mountPath: /secrets/todo-db-connect
+      volumes:
+      - name: endpoint-key
+        secret:
+          secretName: todo-db-connect

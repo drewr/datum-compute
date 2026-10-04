@@ -1,0 +1,78 @@
+# Puts laptops on the "default" VPC network over iroh, each with its own
+# address that instances reach like any other host (todo-db can ping it).
+#
+# Runs default.nix's vpc-gateway image: `vpc-tun gateway` behind a tun
+# device. Each peer in VPC_TUN_PEERS is an iroh endpoint ID (from
+# `vpc-tun keygen` on the laptop) and its address: "+N" is this instance's
+# own address plus N, which stays inside the /96 the network delegates to the
+# instance. Only listed endpoint IDs can connect, and a peer can only send
+# from its own address. reclaimPolicy Retain keeps the instance's /96, and so
+# the laptops' addresses, across redeploys.
+#
+# The gateway's identity is a 32-byte key in Secret vpc-gateway (key "key");
+# laptops connect to its endpoint ID. It has no HTTP port; it dials out to
+# iroh relays.
+#
+# With VPC_TUN_EXIT=1 it is also an exit node: laptops can send their
+# internet traffic through it. The platform only lets an instance's own
+# address out, so the start script masquerades that traffic with nftables.
+# Instances have no IPv4, so the gateway translates laptops' IPv4 to IPv6 for
+# the network's NAT64 (64:ff9b::/96).
+#
+# Capabilities: NET_ADMIN for the tun, routes, proxy neighbor entries and NAT;
+# MKNOD for /dev/net/tun; SYS_ADMIN to remount /proc/sys read-write so it can
+# turn on forwarding and proxy NDP; NET_RAW only for ping while debugging.
+#
+# Apply with: datumctl compute deploy -f manifests/vpc-gateway.yaml
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: vpc-gateway
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Retain
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ghcr-drewr
+          containers:
+          - name: gateway
+            image: ghcr.io/drewr/vpc-gateway:202610042330@sha256:8cfa10a65c37c1e784253bae2989d05409b876e6ea59e1e98762aa08f7b097ee
+            env:
+            # Drew's laptop (`vpc-tun keygen` prints the ID). Add more as ID=+2, ID=+3, ...
+            - name: VPC_TUN_PEERS
+              value: 45b1c90f6cfaf3576ead8bf000e48855787baa87f23263564b847cf1276f29cb=+1
+            # Exit node: masquerade peers' internet-bound traffic to this
+            # instance's address, and translate their IPv4 for the network's
+            # NAT64. Peers opt in with `vpc-tun client --exit[=routes]`.
+            - name: VPC_TUN_EXIT
+              value: "1"
+            securityContext:
+              capabilities:
+                add: [NET_ADMIN, MKNOD, SYS_ADMIN, NET_RAW]
+            volumeAttachments:
+            - name: gateway-key
+              mountPath: /secrets/vpc-gateway
+      volumes:
+      - name: gateway-key
+        secret:
+          secretName: vpc-gateway

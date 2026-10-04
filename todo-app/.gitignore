@@ -1,0 +1,6 @@
+# nix-build output links
+result*
+# Rust and Node build output
+vpc-tun/target/
+app/node_modules/
+app/dist/

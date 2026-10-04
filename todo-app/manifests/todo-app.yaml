@@ -1,0 +1,81 @@
+# Todo list web app (TypeScript on Node.js) on the unikernel class, published
+# at a Datum-managed HTTPS URL and at https://todo.draines.com.
+#
+# The image is default.nix's app attribute wrapped by `datumctl compute build`
+# (a one-line Dockerfile: FROM <the Nix-built image on ghcr>), pushed by
+# datumctl itself:
+#
+#   datumctl compute build . --analyze --push --output ghcr.io/drewr/todo-app-uk:<tag>
+#
+# Let datumctl push it. It writes an image index whose manifest has platform
+# x86_64/kraftcloud; copying its OCI archive with skopeo flattened that to a
+# bare manifest, and unikernel nodes then fail with ImageUnavailable. Refer to
+# the image by digest only (repo@sha256:...), the form that worked here.
+#
+# The ghcr package is public: a flag deploy (the only way to get the URL)
+# drops imagePullSecrets (https://github.com/datum-cloud/compute/issues/432).
+# The runtime class can't be changed on an existing workload; moving classes
+# means destroy and redeploy, which gives the workload a new URL:
+#
+#   datumctl compute deploy todo-app --image=<image@digest> --location=us-central-1 \
+#     --runtime-class=unikernel --http-port=8080 \
+#     --env=PGHOST=fd20:0:1::1:0:0 --env=PGPORT=5432 --env=PGUSER=todo \
+#     --env=PGDATABASE=todo --env-from-secret=todo-db
+#   datumctl dns record set draines.com todo CNAME <new>.datumproxy.net.
+#   datumctl alb hostname add todo-app todo.draines.com
+#
+# Later image changes: datumctl compute deploy -f manifests/todo-app.yaml (keeps the
+# URL). An instance that never becomes ready isn't replaced by a later deploy
+# (https://github.com/datum-cloud/compute/issues/297), and this account can't
+# delete instances, so check that an image pulls before rolling it out.
+#
+# PGHOST is todo-db's private address, kept stable by its Retain policy;
+# outbound connections from the unikernel instance reach it. PGPASSWORD comes
+# from the todo-db Secret.
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: todo-app
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Delete
+      runtime:
+        class: unikernel
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          containers:
+          - name: app
+            image: ghcr.io/drewr/todo-app-uk@sha256:26cb80a5bb3d116b6f170b5d9b0ccd2938a05ab004fbf7aee0d02e497978ff6b
+            ports:
+            - name: http
+              port: 8080
+              protocol: TCP
+            env:
+            - name: PGHOST
+              value: fd20:0:1::1:0:0
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              value: todo
+            - name: PGDATABASE
+              value: todo
+            envFrom:
+            - secretRef:
+                name: todo-db

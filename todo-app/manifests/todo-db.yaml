@@ -1,0 +1,60 @@
+# PostgreSQL for the todo app: a NixOS system (systemd as PID 1,
+# services.postgresql) built by default.nix's db attribute.
+#
+# Not reachable from the internet: no HTTP port, and the instance has only a
+# private address on the "default" network. reclaimPolicy Retain keeps that
+# address across redeploys, since todo-app's PGHOST points at it, and so
+# does todo-db-connect.yaml, the optional iroh endpoint for laptop access.
+#
+# The capabilities are what systemd and NixOS activation need; the
+# general-purpose class grants them inside the instance's own VM. The todo-db
+# Secret (keys POSTGRES_PASSWORD and PGPASSWORD) is mounted as files; a
+# systemd unit sets the todo role's password from it.
+#
+# Apply with: datumctl compute deploy -f manifests/todo-db.yaml
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: todo-db
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Retain
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ghcr-drewr
+          containers:
+          - name: postgres
+            image: ghcr.io/drewr/todo-db:nixos-202610032142@sha256:175cc3137d125748de117162074f3fe2e31b6ce76d388979001fa929190a97ac
+            ports:
+            - name: postgres
+              port: 5432
+            securityContext:
+              capabilities:
+                add: [SYS_ADMIN, CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP, KILL, SYS_CHROOT, SYS_RESOURCE, NET_ADMIN, MKNOD, AUDIT_WRITE]
+            volumeAttachments:
+            - name: todo-db-secret
+              mountPath: /secrets/todo-db
+      volumes:
+      - name: todo-db-secret
+        secret:
+          secretName: todo-db
