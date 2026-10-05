@@ -388,6 +388,19 @@ datumctl alb hostname add todo-app todo.draines.com
 # new name, then `alb hostname add` again.
 ```
 
+## Images in CI
+
+`.github/workflows/images.yml` builds the images with Nix and pushes them to
+ghcr when their inputs change on `main`: `app/` for todo-app (and its
+unikernel wrap, todo-app-uk), `db/` for todo-db, `vpc-tun/` for
+vpc-gateway, and `default.nix` for all three. A manual run builds all of
+them. Each run lists the pushed digests in its summary; deploys stay manual,
+by pinning a digest in `manifests/` and applying it.
+
+The workflow pushes with the repository's `GITHUB_TOKEN`. Packages first
+pushed from a laptop need the repository granted write access once, in each
+package's settings (Manage Actions access).
+
 ## Caveats
 
 - **A flag deploy drops `imagePullSecrets`**

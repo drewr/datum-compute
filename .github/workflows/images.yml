@@ -1,0 +1,117 @@
+# Builds todo-app's images with Nix and pushes them to ghcr when their inputs
+# change on main. Run it by hand (Actions > images > Run workflow) to build
+# all of them.
+#
+#   todo-app      ghcr.io/drewr/todo-app (Nix image) and
+#                 ghcr.io/drewr/todo-app-uk (wrapped for the unikernel class)
+#   todo-db       ghcr.io/drewr/todo-db
+#   vpc-gateway   ghcr.io/drewr/vpc-gateway
+#
+# Deploys stay manual: copy a digest from the run summary into manifests/.
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths: ["todo-app/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/drewr
+  # datumctl's compute plugin, for the unikernel build. Pinned by checksum.
+  COMPUTE_PLUGIN_VERSION: v0.12.1
+  COMPUTE_PLUGIN_SHA256: e9a97cf6b46427467b4fc38cd04610762b610665fc920cbdf4ff56c344c1b17b
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      app: ${{ steps.diff.outputs.app }}
+      db: ${{ steps.diff.outputs.db }}
+      gateway: ${{ steps.diff.outputs.gateway }}
+      tag: ${{ steps.diff.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          echo "tag=$(date -u +%Y%m%d%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          # A manual run, or a push whose previous commit is unknown, builds everything.
+          if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            printf 'app=true\ndb=true\ngateway=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          echo "$changed"
+          any() { grep -qE "$1" <<< "$changed" && echo true || echo false; }
+          {
+            echo "app=$(any '^todo-app/(default\.nix|app/)')"
+            echo "db=$(any '^todo-app/(default\.nix|db/)')"
+            echo "gateway=$(any '^todo-app/(default\.nix|vpc-tun/)')"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: todo-app
+            attr: app
+            run: ${{ needs.changes.outputs.app }}
+          - image: todo-db
+            attr: db
+            run: ${{ needs.changes.outputs.db }}
+          - image: vpc-gateway
+            attr: vpc-gateway
+            run: ${{ needs.changes.outputs.gateway }}
+    name: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v5
+        if: matrix.run == 'true'
+      - uses: cachix/install-nix-action@v31
+        if: matrix.run == 'true'
+      - name: Log in to ghcr
+        if: matrix.run == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        if: matrix.run == 'true'
+        id: push
+        working-directory: todo-app
+        env:
+          REF: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.changes.outputs.tag }}
+        run: |
+          nix-build default.nix -A "${{ matrix.attr }}" -o result
+          loaded=$(docker load < result | sed -n 's/^Loaded image: //p')
+          docker tag "$loaded" "$REF"
+          docker push "$REF"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$REF")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "- \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Wrap for the unikernel class and push
+        if: matrix.run == 'true' && matrix.image == 'todo-app'
+        env:
+          BASE: ${{ steps.push.outputs.digest }}
+          REF: ${{ env.REGISTRY }}/todo-app-uk:${{ needs.changes.outputs.tag }}
+        run: |
+          # The plugin pushes an image index with an x86_64/kraftcloud manifest,
+          # which unikernel nodes need; don't re-push it with other tools.
+          curl -fsSLo plugin.tar.gz "https://github.com/datum-cloud/compute/releases/download/$COMPUTE_PLUGIN_VERSION/datumctl-compute_Linux_x86_64.tar.gz"
+          echo "$COMPUTE_PLUGIN_SHA256  plugin.tar.gz" | sha256sum -c -
+          tar -xzf plugin.tar.gz datumctl-compute
+          mkdir uk && echo "FROM $BASE" > uk/Dockerfile
+          ./datumctl-compute build uk --analyze --push --output "$REF" | tee build.log
+          pushed=$(sed -n 's/^Pushed .* (\(.*\))$/\1/p' build.log)
+          echo "- \`$pushed\` (refer to it by digest only)" >> "$GITHUB_STEP_SUMMARY"
