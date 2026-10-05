@@ -1,0 +1,61 @@
+# A GitHub Actions runner for drewr/datum-compute on the general-purpose
+# class. Workflows pick it with `runs-on: [self-hosted, datum]`.
+#
+# The image comes from default.nix (`nix-build -A image`). Before the first
+# start, create the Secret with a registration token (valid for an hour):
+#
+#   gh api -X POST repos/drewr/datum-compute/actions/runners/registration-token -q .token
+#
+# put it in key registration-token of Secret github-runner. For restarts that
+# outlast the token, use key `pat` instead: a fine-grained token with
+# "Administration: read and write" on this repo, from which the start script
+# mints a fresh registration token each time.
+#
+# The runner stays registered after its first job and keeps its state between
+# jobs, so only attach it to a repo whose pushes you trust. Do not trigger
+# workflows that run on it from pull_request.
+#
+# Apply with: datumctl compute deploy -f manifests/github-runner.yaml
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: github-runner
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Delete
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ghcr-drewr
+          containers:
+          - name: runner
+            image: ghcr.io/drewr/github-runner@sha256:dfad9091a0209deecb5399ecbff4320919aa7153c6af894ce8a018bd02a0dc14
+            env:
+            - name: GITHUB_REPOSITORY
+              value: drewr/datum-compute
+            volumeAttachments:
+            - name: github
+              mountPath: /secrets/github
+      volumes:
+      - name: github
+        secret:
+          secretName: github-runner
