@@ -48,7 +48,7 @@ spec:
           - name: ghcr-drewr
           containers:
           - name: runner
-            image: ghcr.io/drewr/github-runner@sha256:331ae4f73e1cd517a8a0f775e6bbd3175541bab949363c2381e065ab040cd8bd
+            image: ghcr.io/drewr/github-runner@sha256:f2311a4da95bddd3c0b626f9deafa6133da8af6757b30a9a0d035ca8f1be8d32
             env:
             - name: GITHUB_REPOSITORY
               value: drewr/datum-compute

@@ -57,11 +57,17 @@ let
     text = ''
       mkdir -p /tmp /root /work /var/empty
       chmod 1777 /tmp
-      # The VM is killed from outside at about 2 GiB in use, before the guest
-      # sees any pressure. Keep 2 GB free so the kernel swaps early, to a loop
-      # device (a swap file on the root filesystem is refused).
+      # The host kills the VM at about 2 GiB, though the guest sees 4 GB and no
+      # pressure. Take memory blocks offline until about 1.5 GB is left, so the
+      # guest cannot touch more than the host allows, and let the kernel swap
+      # early, to a loop device (a swap file on the root filesystem is refused).
+      mount -o remount,rw /sys
+      for n in $(seq 39 -1 10); do
+        [ "$(awk '/MemTotal/{print $2}' /proc/meminfo)" -le 1600000 ] && break
+        echo 0 > "/sys/devices/system/memory/memory$n/online" 2> /dev/null || true
+      done
       mount -o remount,rw /proc/sys
-      echo 2000000 > /proc/sys/vm/min_free_kbytes
+      echo 400000 > /proc/sys/vm/min_free_kbytes
       echo 100 > /proc/sys/vm/swappiness
       [ -e /dev/loop-control ] || mknod /dev/loop-control c 10 237
       [ -e /dev/loop0 ] || mknod /dev/loop0 b 7 0
