@@ -21,6 +21,11 @@ on:
         type: choice
         options: [github, datum]
         default: github
+      image:
+        description: Build only this image
+        type: choice
+        options: [all, todo-app, todo-db, vpc-gateway]
+        default: all
 
 permissions:
   contents: read
@@ -52,9 +57,15 @@ jobs:
       - id: diff
         env:
           BEFORE: ${{ github.event.before }}
+          ONLY: ${{ inputs.image }}
         run: |
           echo "tag=$(date -u +%Y%m%d%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           # A manual run, or a push whose previous commit is unknown, builds everything.
+          if [ -n "$ONLY" ] && [ "$ONLY" != all ]; then
+            k=$(case "$ONLY" in todo-app) echo app;; todo-db) echo db;; *) echo gateway;; esac)
+            for n in app db gateway; do echo "$n=$([ "$n" = "$k" ] && echo true || echo false)"; done >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             printf 'app=true\ndb=true\ngateway=true\n' >> "$GITHUB_OUTPUT"
             exit 0
@@ -74,6 +85,8 @@ jobs:
     runs-on: ${{ inputs.runner == 'datum' && fromJSON('["self-hosted","datum"]') || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
+      # The Datum runner is one small instance.
+      max-parallel: 1
       matrix:
         include:
           - image: todo-app
@@ -98,6 +111,10 @@ jobs:
         run: |
           mkdir -p ~/.docker
           echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile ~/.docker/config.json
+      - name: Log memory
+        if: matrix.run == 'true' && inputs.runner == 'datum'
+        run: |
+          nohup sh -c 'while :; do echo "$(date +%T) $(grep -E "MemAvailable|Dirty" /proc/meminfo | tr -s " \n" " ")"; sleep 5; done' > "$RUNNER_TEMP/mem.log" 2>&1 &
       - name: Build and push
         if: matrix.run == 'true'
         id: push
@@ -110,6 +127,9 @@ jobs:
           digest="${{ env.REGISTRY }}/${{ matrix.image }}@$(cat digest)"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "- \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Show memory log
+        if: always() && matrix.run == 'true' && inputs.runner == 'datum'
+        run: tail -n 40 "$RUNNER_TEMP/mem.log" || true
       - name: Wrap for the unikernel class and push
         if: matrix.run == 'true' && matrix.image == 'todo-app'
         env:

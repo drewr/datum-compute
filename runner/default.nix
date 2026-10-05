@@ -36,6 +36,8 @@ let
   nixConf = pkgs.writeTextDir "etc/nix/nix.conf" ''
     build-users-group = nixbld
     sandbox = false
+    max-jobs = 1
+    cores = 1
     experimental-features = nix-command flakes
   '';
 
@@ -55,19 +57,8 @@ let
     text = ''
       mkdir -p /tmp /root /work /var/empty
       chmod 1777 /tmp
-      # The container's root filesystem refuses to rename a read-only
-      # directory into another one, which is how Nix adds a path to the
-      # store. Keep the store on an ext4 image mounted through a loop device
-      # instead: seed it with the image's store, then mount it over
-      # /nix/store. (The platform has no disk volumes for this class.)
-      if [ ! -e /dev/loop-control ]; then mknod /dev/loop-control c 10 237; fi
-      for i in 0 1 2 3; do [ -e /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
-      mkdir -p /work/store
-      truncate -s 30G /work/nix.img
-      mkfs.ext4 -q -F -m 0 /work/nix.img
-      mount -o loop /work/nix.img /work/store
-      cp -a /nix/store/. /work/store/
-      mount --bind /work/store /nix/store
+      # Nix adds a store path by renaming a read-only directory, which needs
+      # DAC_OVERRIDE (see the manifest). Let the build users write the store.
       chown root:nixbld /nix/store
       chmod 1775 /nix/store
       nix-store --load-db < ${closure}/registration

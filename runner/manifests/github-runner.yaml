@@ -48,15 +48,15 @@ spec:
           - name: ghcr-drewr
           containers:
           - name: runner
-            image: ghcr.io/drewr/github-runner@sha256:4392f0dd23b6c28281196e38a505a9c7f01c5bf42e3939c696ca793b36eff623
+            image: ghcr.io/drewr/github-runner@sha256:2e97ae481b5f18a28ca586de7cf3793d9013ce2050610b77fa7ffcabb071671e
             env:
             - name: GITHUB_REPOSITORY
               value: drewr/datum-compute
-            # MKNOD for the loop devices and SYS_ADMIN to mount an ext4 image
-            # for the Nix store (see default.nix).
+            # Nix runs as root and builds as the nixbld users. Adding a store
+            # path renames a read-only directory, which needs DAC_OVERRIDE.
             securityContext:
               capabilities:
-                add: [MKNOD, SYS_ADMIN]
+                add: [DAC_OVERRIDE, CHOWN, FOWNER, SETUID, SETGID, KILL]
             volumeAttachments:
             - name: github
               mountPath: /secrets/github
