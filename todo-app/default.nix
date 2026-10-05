@@ -20,6 +20,20 @@ let
     PRETTY_NAME="NixOS ${lib.trivial.release} (${lib.trivial.codeName})"
   '';
 
+  # Lets `nix-shell -p hello` work in the exec-able images: nixpkgs is the
+  # pinned channel above, and the image's own store paths are registered when
+  # the container starts (the image carries no Nix database).
+  nixEnv = [
+    "NIX_PATH=nixpkgs=${nixpkgsSrc}"
+    "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+    "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+  ];
+  nixConf = pkgs.writeTextDir "etc/nix/nix.conf" ''
+    experimental-features = nix-command flakes
+    sandbox = false
+    build-users-group =
+  '';
+
   # Compiles src/*.ts with tsc and keeps only production dependencies.
   todoApp = pkgs.buildNpmPackage {
     pname = "todo-app";
@@ -61,6 +75,26 @@ let
         networking.resolvconf.enable = false;
         # Instances only have private addresses and no inbound internet path.
         networking.firewall.enable = false;
+
+        # A shell and Nix for `datumctl compute exec`. nix-shell -p hello works:
+        # nixpkgs is the pinned channel, and the oneshot below registers the
+        # image's store paths from /nix-path-registration on first boot.
+        programs.zsh.enable = true;
+        nix.nixPath = [ "nixpkgs=${nixpkgsSrc}" ];
+        nix.settings = {
+          sandbox = false;
+          experimental-features = [ "nix-command" "flakes" ];
+        };
+        systemd.services.nix-image-registration = {
+          wantedBy = [ "multi-user.target" ];
+          before = [ "nix-daemon.service" "nix-daemon.socket" ];
+          unitConfig.ConditionPathExists = "/nix-path-registration";
+          serviceConfig.Type = "oneshot";
+          script = ''
+            ${config.nix.package}/bin/nix-store --load-db < /nix-path-registration
+            rm /nix-path-registration
+          '';
+        };
 
         services.postgresql = {
           enable = true;
@@ -116,14 +150,19 @@ let
     cargoLock.lockFile = ./vpc-tun/Cargo.lock;
   };
 
+  dbClosure = pkgs.closureInfo { rootPaths = [ dbSystem ]; };
+
   # The gateway forwards between eth0 and the tun, and answers neighbor
   # discovery on eth0 for each peer's address (the VPC finds addresses inside
   # an instance's /96 by NDP). /proc/sys is mounted read-only in the
   # container; remounting it needs CAP_SYS_ADMIN.
+  gatewayTools = with pkgs; [ bashInteractive coreutils gnugrep procps iproute2 iputils tcpdump nftables zsh nix dockerTools.caCertificates nixConf ];
+  gatewayClosure = pkgs.closureInfo { rootPaths = gatewayTools ++ [ nixpkgsSrc pkgs.util-linux vpcTun ]; };
   gatewayStart = pkgs.writeShellApplication {
     name = "vpc-gateway-start";
-    runtimeInputs = with pkgs; [ coreutils iproute2 nftables util-linux vpcTun ];
+    runtimeInputs = with pkgs; [ coreutils iproute2 nftables util-linux vpcTun nix ];
     text = ''
+      [ -e /nix/var/nix/db/db.sqlite ] || nix-store --load-db < ${gatewayClosure}/registration
       mount -o remount,rw /proc/sys
       echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
       echo 2 > /proc/sys/net/ipv6/conf/eth0/accept_ra # keep the RA default route
@@ -179,11 +218,15 @@ in
   db = dockerTools.buildLayeredImage {
     name = "todo-db";
     tag = lib.trivial.release;
-    extraCommands = "mkdir -p sbin tmp && ln -s ${dbSystem}/init sbin/init";
+    extraCommands = ''
+      mkdir -p sbin tmp
+      ln -s ${dbSystem}/init sbin/init
+      cp ${dbClosure}/registration nix-path-registration
+    '';
     config = {
       Cmd = [ "${dbSystem}/init" ];
       # Lets `datumctl compute exec` find sh and the system's tools.
-      Env = [ "PATH=/run/current-system/sw/bin:/bin" ];
+      Env = [ "PATH=/run/current-system/sw/bin:/bin" ] ++ nixEnv;
       ExposedPorts."5432/tcp" = { };
     };
   };
@@ -195,11 +238,16 @@ in
   vpc-gateway = dockerTools.buildLayeredImage {
     name = "vpc-gateway";
     tag = lib.trivial.release;
-    # ping, ip, ss, tcpdump, grep and ps for debugging with `datumctl compute exec`.
-    contents = with pkgs; [ bashInteractive coreutils gnugrep procps iproute2 iputils tcpdump nftables dockerTools.caCertificates ];
+    # ping, ip, ss, tcpdump, grep and ps for debugging with `datumctl compute
+    # exec`, plus zsh and Nix (see nixEnv).
+    contents = gatewayTools;
+    extraCommands = ''
+      mkdir -p tmp
+      chmod 1777 tmp
+    '';
     config = {
       Cmd = [ "${gatewayStart}/bin/vpc-gateway-start" ];
-      Env = [ "PATH=/bin" ];
+      Env = [ "PATH=/bin" ] ++ nixEnv;
     };
   };
 }
