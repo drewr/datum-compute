@@ -57,6 +57,19 @@ let
     text = ''
       mkdir -p /tmp /root /work /var/empty
       chmod 1777 /tmp
+      # The VM is killed from outside at about 2 GiB in use, before the guest
+      # sees any pressure. Keep 2 GB free so the kernel swaps early, to a loop
+      # device (a swap file on the root filesystem is refused).
+      mount -o remount,rw /proc/sys
+      echo 2000000 > /proc/sys/vm/min_free_kbytes
+      echo 100 > /proc/sys/vm/swappiness
+      [ -e /dev/loop-control ] || mknod /dev/loop-control c 10 237
+      [ -e /dev/loop0 ] || mknod /dev/loop0 b 7 0
+      fallocate -l 4G /work/swap
+      chmod 600 /work/swap
+      mkswap /work/swap > /dev/null
+      losetup --direct-io=on /dev/loop0 /work/swap
+      swapon /dev/loop0
       # Nix adds a store path by renaming a read-only directory, which needs
       # DAC_OVERRIDE (see the manifest). Let the build users write the store.
       chown root:nixbld /nix/store
