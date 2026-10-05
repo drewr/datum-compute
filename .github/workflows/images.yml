@@ -44,7 +44,7 @@ env:
 
 jobs:
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner == 'datum' && fromJSON('["self-hosted","datum"]') || 'ubuntu-24.04' }}
     outputs:
       app: ${{ steps.diff.outputs.app }}
       db: ${{ steps.diff.outputs.db }}
