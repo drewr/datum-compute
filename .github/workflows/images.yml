@@ -111,10 +111,6 @@ jobs:
         run: |
           mkdir -p ~/.docker
           echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile ~/.docker/config.json
-      - name: Log memory
-        if: matrix.run == 'true' && inputs.runner == 'datum'
-        run: |
-          nohup sh -c 'while :; do echo "$(date +%T) $(grep -E "MemAvailable|Dirty" /proc/meminfo | tr -s " \n" " ")"; sleep 5; done' > "$RUNNER_TEMP/mem.log" 2>&1 &
       - name: Build and push
         if: matrix.run == 'true'
         id: push
@@ -122,14 +118,15 @@ jobs:
         env:
           REF: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.changes.outputs.tag }}
         run: |
+          # On the Datum runner, stream memory use into this log; the VM may die mid-build.
+          if [ "${{ inputs.runner }}" = datum ]; then
+            (while :; do echo "mem $(date +%T) $(awk '/MemAvailable|^Dirty|^Cached/{printf "%s%s ", $1, $2}' /proc/meminfo)"; sleep 3; done) &
+          fi
           nix-build default.nix -A "${{ matrix.attr }}" -o result
           skopeo copy --authfile ~/.docker/config.json --digestfile digest docker-archive:result "docker://$REF"
           digest="${{ env.REGISTRY }}/${{ matrix.image }}@$(cat digest)"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "- \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-      - name: Show memory log
-        if: always() && matrix.run == 'true' && inputs.runner == 'datum'
-        run: tail -n 40 "$RUNNER_TEMP/mem.log" || true
       - name: Wrap for the unikernel class and push
         if: matrix.run == 'true' && matrix.image == 'todo-app'
         env:
