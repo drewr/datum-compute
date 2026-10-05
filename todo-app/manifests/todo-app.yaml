@@ -62,7 +62,7 @@ spec:
         sandbox:
           containers:
           - name: app
-            image: ghcr.io/drewr/todo-app-uk@sha256:26cb80a5bb3d116b6f170b5d9b0ccd2938a05ab004fbf7aee0d02e497978ff6b
+            image: ghcr.io/drewr/todo-app-uk@sha256:e73c53e1a0c25b0b4ce297e98f123470233213e1bb2d4552d569d93f3d0d10fd
             ports:
             - name: http
               port: 8080
