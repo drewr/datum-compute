@@ -48,10 +48,15 @@ spec:
           - name: ghcr-drewr
           containers:
           - name: runner
-            image: ghcr.io/drewr/github-runner@sha256:dfad9091a0209deecb5399ecbff4320919aa7153c6af894ce8a018bd02a0dc14
+            image: ghcr.io/drewr/github-runner@sha256:4392f0dd23b6c28281196e38a505a9c7f01c5bf42e3939c696ca793b36eff623
             env:
             - name: GITHUB_REPOSITORY
               value: drewr/datum-compute
+            # MKNOD for the loop devices and SYS_ADMIN to mount an ext4 image
+            # for the Nix store (see default.nix).
+            securityContext:
+              capabilities:
+                add: [MKNOD, SYS_ADMIN]
             volumeAttachments:
             - name: github
               mountPath: /secrets/github

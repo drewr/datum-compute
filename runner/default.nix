@@ -16,15 +16,25 @@ let
   # unikernel image.
   tools = with pkgs; [
     bashInteractive coreutils findutils gnugrep gnused gawk gnutar gzip xz bzip2 unzip
-    diffutils patch which util-linux curl jq git gh nix skopeo buildkit
+    diffutils patch which util-linux e2fsprogs curl jq git gh nix skopeo buildkit
   ];
 
   # Registers the image's own store paths, so a root-run `nix` (single user,
   # no sandbox) treats them as valid instead of fetching them again.
   closure = pkgs.closureInfo { rootPaths = tools ++ [ pkgs.github-runner ]; };
 
+  # Builds run as these users, not root: Postgres' config check refuses root.
+  buildUsers = 8;
+  nss = dockerTools.fakeNss.override {
+    extraPasswdLines = builtins.genList (i:
+      "nixbld${toString (i + 1)}:x:${toString (30001 + i)}:30000:Nix build user ${toString (i + 1)}:/var/empty:/bin/nologin") buildUsers;
+    extraGroupLines = [
+      "nixbld:x:30000:${lib.concatMapStringsSep "," (i: "nixbld${toString (i + 1)}") (lib.range 0 (buildUsers - 1))}"
+    ];
+  };
+
   nixConf = pkgs.writeTextDir "etc/nix/nix.conf" ''
-    build-users-group =
+    build-users-group = nixbld
     sandbox = false
     experimental-features = nix-command flakes
   '';
@@ -43,9 +53,24 @@ let
     name = "runner-start";
     runtimeInputs = tools ++ [ pkgs.github-runner ];
     text = ''
-      nix-store --load-db < ${closure}/registration
-      mkdir -p /tmp /root /work
+      mkdir -p /tmp /root /work /var/empty
       chmod 1777 /tmp
+      # The container's root filesystem refuses to rename a read-only
+      # directory into another one, which is how Nix adds a path to the
+      # store. Keep the store on an ext4 image mounted through a loop device
+      # instead: seed it with the image's store, then mount it over
+      # /nix/store. (The platform has no disk volumes for this class.)
+      if [ ! -e /dev/loop-control ]; then mknod /dev/loop-control c 10 237; fi
+      for i in 0 1 2 3; do [ -e /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done
+      mkdir -p /work/store
+      truncate -s 30G /work/nix.img
+      mkfs.ext4 -q -F -m 0 /work/nix.img
+      mount -o loop /work/nix.img /work/store
+      cp -a /nix/store/. /work/store/
+      mount --bind /work/store /nix/store
+      chown root:nixbld /nix/store
+      chmod 1775 /nix/store
+      nix-store --load-db < ${closure}/registration
       export HOME=/root RUNNER_ROOT=/work/runner RUNNER_ALLOW_RUNASROOT=1
       if [ -f /secrets/github/pat ]; then
         token=$(curl -fsS -X POST \
@@ -66,7 +91,7 @@ in
   image = dockerTools.buildLayeredImage {
     name = "github-runner";
     tag = lib.trivial.release;
-    contents = tools ++ [ dockerTools.fakeNss dockerTools.caCertificates nixConf containersPolicy ];
+    contents = tools ++ [ nss dockerTools.caCertificates nixConf containersPolicy ];
     config = {
       Cmd = [ "${start}/bin/runner-start" ];
       Env = [
