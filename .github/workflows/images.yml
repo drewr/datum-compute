@@ -15,6 +15,17 @@ on:
     branches: [main]
     paths: ["todo-app/**"]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: Where to run the builds
+        type: choice
+        options: [github, datum]
+        default: github
+      image:
+        description: Build only this image
+        type: choice
+        options: [all, todo-app, todo-db, vpc-gateway]
+        default: all
 
 permissions:
   contents: read
@@ -33,7 +44,7 @@ env:
 
 jobs:
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner == 'datum' && fromJSON('["self-hosted","datum"]') || 'ubuntu-24.04' }}
     outputs:
       app: ${{ steps.diff.outputs.app }}
       db: ${{ steps.diff.outputs.db }}
@@ -46,9 +57,15 @@ jobs:
       - id: diff
         env:
           BEFORE: ${{ github.event.before }}
+          ONLY: ${{ inputs.image }}
         run: |
           echo "tag=$(date -u +%Y%m%d%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           # A manual run, or a push whose previous commit is unknown, builds everything.
+          if [ -n "$ONLY" ] && [ "$ONLY" != all ]; then
+            k=$(case "$ONLY" in todo-app) echo app;; todo-db) echo db;; *) echo gateway;; esac)
+            for n in app db gateway; do echo "$n=$([ "$n" = "$k" ] && echo true || echo false)"; done >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             printf 'app=true\ndb=true\ngateway=true\n' >> "$GITHUB_OUTPUT"
             exit 0
@@ -64,9 +81,12 @@ jobs:
 
   build:
     needs: changes
-    runs-on: ubuntu-24.04
+    # "datum" is the runner on a Datum compute instance (runner/).
+    runs-on: ${{ inputs.runner == 'datum' && fromJSON('["self-hosted","datum"]') || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
+      # The Datum runner is one small instance.
+      max-parallel: 1
       matrix:
         include:
           - image: todo-app
@@ -82,11 +102,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: matrix.run == 'true'
+      # The Datum runner has Nix already.
       - uses: cachix/install-nix-action@v31
-        if: matrix.run == 'true'
+        if: matrix.run == 'true' && inputs.runner != 'datum'
       - name: Log in to ghcr
         if: matrix.run == 'true'
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        # The docker config location is also where datumctl looks for credentials.
+        run: |
+          mkdir -p ~/.docker
+          echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile ~/.docker/config.json
       - name: Build and push
         if: matrix.run == 'true'
         id: push
@@ -94,11 +118,13 @@ jobs:
         env:
           REF: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.changes.outputs.tag }}
         run: |
+          # On the Datum runner, stream memory use into this log; the VM may die mid-build.
+          if [ "${{ inputs.runner }}" = datum ]; then
+            (while :; do echo "mem $(date +%T) $(awk '/MemAvailable|^Dirty|^Cached/{printf "%s%s ", $1, $2}' /proc/meminfo)"; sleep 3; done) &
+          fi
           nix-build default.nix -A "${{ matrix.attr }}" -o result
-          loaded=$(docker load < result | sed -n 's/^Loaded image: //p')
-          docker tag "$loaded" "$REF"
-          docker push "$REF"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$REF")
+          skopeo copy --authfile ~/.docker/config.json --digestfile digest docker-archive:result "docker://$REF"
+          digest="${{ env.REGISTRY }}/${{ matrix.image }}@$(cat digest)"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "- \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Wrap for the unikernel class and push
@@ -115,8 +141,12 @@ jobs:
           tar -xzf plugin.tar.gz datumctl-compute
           mkdir uk && echo "FROM $BASE" > uk/Dockerfile
           # Docker's built-in BuildKit has no oci exporter, so run a standalone one.
-          docker run -d --name buildkitd --privileged -p 127.0.0.1:1234:1234 \
-            "$BUILDKIT_IMAGE" --addr tcp://0.0.0.0:1234
+          if command -v docker > /dev/null; then
+            docker run -d --name buildkitd --privileged -p 127.0.0.1:1234:1234 \
+              "$BUILDKIT_IMAGE" --addr tcp://0.0.0.0:1234
+          else
+            buildkitd --addr tcp://127.0.0.1:1234 --oci-worker-snapshotter=native > buildkitd.log 2>&1 &
+          fi
           export BUILDKIT_HOST=tcp://127.0.0.1:1234
           for _ in $(seq 30); do (exec 3<>/dev/tcp/127.0.0.1/1234) 2>/dev/null && break; sleep 1; done
           ./datumctl-compute build uk --analyze --push --output "$REF" | tee build.log
