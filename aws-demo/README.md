@@ -7,12 +7,12 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 ```
 bin/setup [N]            N random regions from the pool (default 3); REGIONS="a b" for a list
 bin/status               instances, SSM state, the gateway, each member's address
-bin/netcheck [REGION]    netcheck on one instance (random if no region); fetches ssm-session-manager-plugin via nix-shell if missing
+bin/netcheck [REGION]    netcheck on one instance (random if no region)
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
 bin/teardown [--purge]   delete everything setup created
 ```
 
-You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin` (nixpkgs: `ssm-session-manager-plugin`; `bin/netcheck` fetches it with nix-shell).
+You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin` (nixpkgs: `ssm-session-manager-plugin`; `bin/login` and `bin/netcheck` fetch it with nix-shell if missing).
 The AWS account comes from `aws sts get-caller-identity` and the Datum org and project from
 `datumctl whoami` (override with `ORG=` and `PROJECT=`). Run `bin/setup` again to resume or repair.
 

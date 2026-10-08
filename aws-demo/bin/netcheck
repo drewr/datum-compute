@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # bin/netcheck [REGION]   run netcheck on one instance (random one from the fleet if no region given).
 . "$(dirname "$0")/../lib/common.sh"
-if ! command -v session-manager-plugin >/dev/null; then
-  command -v nix-shell >/dev/null || die "session-manager-plugin not found (and no nix-shell to fetch it)"
-  exec nix-shell -p ssm-session-manager-plugin --run "$(printf '%q ' "$0" "$@")"
-fi
 r=${1:-$(regions | shuf -n1)}
 [ -n "$r" ] || die "no regions; run bin/setup first"
 say "netcheck on $r"

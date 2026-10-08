@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # bin/login REGION [command...]   shell (or one command) on that region's instance, over SSM.
 . "$(dirname "$0")/../lib/common.sh"
-command -v session-manager-plugin >/dev/null || die "session-manager-plugin not found (nix-shell -p ssm-session-manager-plugin, or use bin/netcheck)"
+if ! command -v session-manager-plugin >/dev/null; then
+  command -v nix-shell >/dev/null || die "session-manager-plugin not found and no nix-shell to fetch it"
+  say "session-manager-plugin not found; retrying under nix-shell"
+  exec nix-shell -p ssm-session-manager-plugin --run "$(printf '%q ' "$0" "$@")"
+fi
 r=${1:?usage: login REGION [command...]}; shift
 iid=$(instance_id "$r"); [ -n "$iid" ] || die "no instance in $r"
 # The operator policy only allows these documents, not SSM-SessionManagerRunShell.
