@@ -7,6 +7,7 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 ```
 bin/setup [N]            N random regions from the pool (default 3); REGIONS="a b" for a list
 bin/status               instances, SSM state, the gateway, each member's address
+bin/netcheck [REGION]    netcheck on one instance (random if no region); fetches session-manager-plugin via nix-shell if missing
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
 bin/teardown [--purge]   delete everything setup created
 ```
