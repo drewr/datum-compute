@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# netcheck: concise Datum Connect report (underlay, relays, VPC attachment, member latency)
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+PROJECT=project-xx4hh
+[ -r /etc/netcheck.conf ] && . /etc/netcheck.conf
+MEMBERS=/etc/netcheck-members
+T=/home/datum/.local/state/datumctl/connect/daemon/daemon_auth/setup.token
+st=$(runuser -u datum -- env HOME=/home/datum XDG_RUNTIME_DIR=/run/user/$(id -u datum) datumctl connect status --project $PROJECT --token-file $T 2>&1)
+me=$(echo "$st" | awk '/^Connector:/{print $2}')
+net=$(echo "$st" | awk '/^Network /{gsub(":","",$2); print $2}')
+addr=$(echo "$st" | sed -n 's/^Network [^:]*: connected, \([^ ]*\) on \([^ ]*\) .*/\1 \2/p')
+gw=$(echo "$st" | sed -n 's/.*VPC gateway: \([^ ]*\) (\([^)]*\)).*/\1 \2/p')
+tr=$(echo "$st" | sed -n 's/.*Transport: \([^;]*\); IP datagram capacity: \([0-9]*\) bytes; MTU errors: \([0-9]*\).*/\1 mtu=\2 errs=\3/p')
+v4=$(curl -4 -s -m3 https://checkip.amazonaws.com); v6=$(curl -6 -s -m3 https://api64.ipify.org 2>/dev/null)
+edge=$(curl -s -m3 https://edge.datum.net/ | sed -n 's/^region=//p')
+tok=$(curl -s -m2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+region=$(curl -s -m2 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/placement/region)
+ms() { awk -v v="$1" 'BEGIN{ if (v=="") print ""; else printf "%.1fms", v*1000 }'; }
+echo "Report:"
+echo "    * This machine's region: ${region:-?}"
+echo "    * Connector: ${me:-?}"
+echo "    * IPv4: ${v4:-(none)}"
+echo "    * IPv6: ${v6:-no}"
+echo "    * Edge-reported location: ${edge:-?}"
+echo "    * VPC: ${net:-not joined}   address: ${addr% *}"
+echo "    * Gateway: ${gw:-none}"
+echo "    * Transport: ${tr:-?}"
+echo "    * Relay latency (TLS):"
+for r in us-central-1 us-east-1; do
+  t=$(curl -so /dev/null -m4 -w '%{time_appconnect}' https://iroh-relay.$r.datum-staging.net/ 2>/dev/null)
+  echo "        - $r = $(ms "$t")"
+done
+echo "    * VPC member latency:"
+d=$(mktemp -d)
+while read n a; do [ "$n" = "$me" ] && continue
+  ( v=$(ping -6 -c3 -W2 -q "$a" 2>/dev/null | awk -F/ '/^rtt/{print $5}'); echo "${v:-9999} $n $a" > $d/$n ) &
+done < $MEMBERS; wait
+cat $d/* | sort -n | awk '{ n=$2; sub(/^aws-test-/,"",n); sub(/-1$/,"",n); r[NR]=n; l[NR]=$1; a[NR]=$3; if (length(n)>w) w=length(n); if (length($3)>x) x=length($3) }
+  END { for (i=1;i<=NR;i++) { if (l[i]==9999) t="unreachable"; else t=sprintf("%.1fms",l[i]); printf "        - %-*s\t%-*s\t%s\n",x,a[i],w,r[i],t } }'
+rm -rf $d

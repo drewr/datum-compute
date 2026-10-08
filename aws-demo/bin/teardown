@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Remove everything bin/setup created: instances, SGs, roles, profiles, SSM keys, Datum service
+# accounts/keys/bindings/connectors, the gateway and the network.
+#
+#   bin/teardown               regions from state/regions.txt (or REGIONS="...")
+#   bin/teardown --purge       also delete the shared permissions boundary policy
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
+[ -n "${REGIONS:-}" ] && tr ' ' '\n' <<<"$REGIONS" >"$regions_file"
+[ -s "$regions_file" ] || die "no regions known (no $regions_file); set REGIONS=\"...\""
+GW=connect-$NET-$GW_LOCATION
+
+aws_down() {
+  local r=$1 n; n=$(inst_name "$r")
+  local ids; ids=$(aws ec2 describe-instances --region "$r" --filters "Name=tag:Name,Values=$n" "Name=tag:project,Values=$TAG" \
+    Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086
+    aws ec2 terminate-instances --region "$r" --instance-ids $ids >/dev/null
+    # shellcheck disable=SC2086
+    aws ec2 wait instance-terminated --region "$r" --instance-ids $ids
+  fi
+  local sg; sg=$(aws ec2 describe-security-groups --region "$r" --filters Name=group-name,Values="$n" "Name=tag:project,Values=$TAG" --query 'SecurityGroups[0].GroupId' --output text)
+  [ "$sg" != None ] && for _ in 1 2 3 4 5 6; do aws ec2 delete-security-group --region "$r" --group-id "$sg" 2>/dev/null && break; sleep 10; done
+  aws iam remove-role-from-instance-profile --instance-profile-name "$n" --role-name "$n" 2>/dev/null
+  aws iam delete-instance-profile --instance-profile-name "$n" 2>/dev/null
+  aws iam delete-role-policy --role-name "$n" --policy-name own-key-and-ssm 2>/dev/null
+  aws iam delete-role --role-name "$n" 2>/dev/null
+  aws ssm delete-parameter --region "$r" --name "/datum-test/$r-1/key" 2>/dev/null
+  return 0
+}
+
+pids=()
+for r in $(regions); do
+  say "$r: AWS teardown"
+  ( aws_down "$r" >"$STATE_DIR/logs/down-$r.log" 2>&1 ) & pids+=($!)
+done
+
+for r in $(regions); do
+  n=$(sa_name "$r"); say "$r: Datum teardown"
+  for b in $(dc get connectnetworkbindings -o json | jq -r --arg c "$n" '.items[]|select(.spec.connectorRef==$c)|.metadata.name'); do
+    dc delete connectnetworkbindings "$b" >/dev/null 2>&1
+  done
+  dc delete connectors "$n" >/dev/null 2>&1
+  dco delete policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1
+  dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1
+  dc delete serviceaccounts "$n" >/dev/null 2>&1
+done
+say "deleting gateway $GW and network $NET"
+dc delete connectgateways "$GW" >/dev/null 2>&1
+dc delete networks "$NET" >/dev/null 2>&1
+warn "check for leftover ConnectGateway quota claims (README, 'Quota'); they need a staff identity to delete"
+
+wait "${pids[@]}"
+if [ "$PURGE" = 1 ]; then
+  aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT:policy/$BOUNDARY" 2>&1 | tail -1
+fi
+rm -rf "$STATE_DIR"
+say "done"
