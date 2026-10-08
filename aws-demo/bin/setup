@@ -194,5 +194,9 @@ for r in $(regions); do
 done
 
 say "members of $NET via $GW:"; echo "$members" | sed 's/^/    /'
-say "try: bin/login <region> netcheck"
+say "connect to an instance and run netcheck:"
+for r in $(regions); do
+  echo "    ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login $r netcheck      # no argument after the region: interactive shell"
+done
+command -v session-manager-plugin >/dev/null || echo "    (needs session-manager-plugin: nix-shell -p session-manager-plugin, or https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)"
 exit $fail

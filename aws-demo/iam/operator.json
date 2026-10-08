@@ -24,6 +24,12 @@
       "Resource": "arn:aws:ssm:*::parameter/aws/service/*"
     },
     {
+      "Sid": "ReadBoundaryPolicy",
+      "Effect": "Allow",
+      "Action": "iam:GetPolicy",
+      "Resource": "arn:aws:iam::__ACCOUNT__:policy/datum-test-instance-boundary"
+    },
+    {
       "Sid": "LaunchTaggedInstances",
       "Effect": "Allow",
       "Action": "ec2:RunInstances",
@@ -114,8 +120,7 @@
       "Sid": "InstanceRolesWithBoundary",
       "Effect": "Allow",
       "Action": [
-        "iam:CreateRole",
-        "iam:TagRole"
+        "iam:CreateRole"
       ],
       "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*",
       "Condition": {
@@ -123,6 +128,12 @@
           "iam:PermissionsBoundary": "arn:aws:iam::__ACCOUNT__:policy/datum-test-instance-boundary"
         }
       }
+    },
+    {
+      "Sid": "TagInstanceRoles",
+      "Effect": "Allow",
+      "Action": "iam:TagRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*"
     },
     {
       "Sid": "InstanceRoleInlinePolicies",

@@ -22,9 +22,18 @@ P="--project $PROJECT"
 datumctl plugin trust connect >/dev/null 2>&1
 datumctl connect daemon install --credentials-file /home/datum/cred.json 2>&1 | head -1
 datumctl connect daemon start 2>&1 | tail -1
-datumctl connect up \$P --name $CONNECTOR --credentials-file /home/datum/cred.json \$T 2>&1 | tail -3
-datumctl connect join $NET \$P \$T 2>&1 | tail -4
+# The gateway workload can still be scaling when setup starts; up/join time out until it is ready, so retry.
+ok=
+for i in \$(seq 1 30); do
+  datumctl connect up \$P --name $CONNECTOR --credentials-file /home/datum/cred.json \$T 2>&1 | tail -2
+  datumctl connect join $NET \$P \$T 2>&1 | tail -2
+  if datumctl connect status \$P \$T 2>&1 | grep -q "Network $NET: connected"; then ok=1; break; fi
+  echo "not joined yet (attempt \$i), retrying in 20s"; sleep 20
+done
+datumctl connect status \$P \$T 2>&1 | head -8
+[ -n "\$ok" ]
 EOS
 chmod 644 /tmp/ub.sh
-runuser -u datum -- bash /tmp/ub.sh
+rc=0; runuser -u datum -- bash /tmp/ub.sh || rc=$?
 rm -f /home/datum/cred.json /run/datum/key.json /run/datum/connect-cred.json /root/helper-config.json /tmp/ub.sh
+exit $rc

@@ -70,7 +70,10 @@ There is no SSH. You reach an instance through SSM Session Manager (`bin/login`)
 
 `iam/operator.json` is the least-privilege policy the AWS operator ran under: EC2, IAM and SSM
 actions limited by tag, by the `datum-test-*` name prefix, by the permissions boundary, and by a
-region allow-list matching the default pool. An AWS admin attaches it; the scripts do not.
+region allow-list matching the default pool. An AWS admin sets this up once; the scripts do not:
+create the boundary policy from `iam/boundary.json` (the operator can only read it), create the
+policy from `iam/operator.json`, and attach it to an IAM user (we use `alice`). Replace `__ACCOUNT__`
+with the account id first.
 
 ## 5. What runs on each instance
 
