@@ -8,7 +8,7 @@
 # Creates (idempotent, re-run to repair or to pick up a changed iam/*.json):
 #   - the permissions boundary  datum-test-instance-boundary   (iam/boundary.json)
 #   - the operator policy       datum-test-operator            (iam/operator.json)
-#   - the IAM user              datum-demo-operator-<UTC timestamp>, with that policy attached
+#   - the IAM user              demoYYMMDD, with that policy attached
 #   - an access key for it, written to a local profile (never printed)
 #
 # Settings: IAM_USER (default: a new timestamped name; a re-run reuses the user its profile already
@@ -34,13 +34,13 @@ CALLER=$(aws sts get-caller-identity --query Arn --output text 2>&1) || die "aws
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 PROFILE=${PROFILE:-datum-demo-$ACCOUNT}
 case $CALLER in
-  *":user/datum-demo-operator-"*) die "$CALLER is an operator user; run this with an admin profile" ;;
+  *":user/demo"[0-9][0-9][0-9][0-9][0-9][0-9]) die "$CALLER is an operator user (demoYYMMDD); run this with an admin profile" ;;
 esac
 if [ -z "${IAM_USER:-}" ]; then
   prev=$(AWS_PROFILE=$PROFILE aws sts get-caller-identity --query Arn --output text 2>/dev/null)
   case $prev in
-    "arn:aws:iam::$ACCOUNT:user/datum-demo-operator-"*) IAM_USER=${prev##*/} ;;
-    *) IAM_USER=datum-demo-operator-$(date -u +%Y%m%d-%H%M%S) ;;
+    "arn:aws:iam::$ACCOUNT:user/demo"[0-9][0-9][0-9][0-9][0-9][0-9]) IAM_USER=${prev##*/} ;;
+    *) IAM_USER=demo$(date -u +%y%m%d) ;;
   esac
 fi
 USER_NAME=$IAM_USER
