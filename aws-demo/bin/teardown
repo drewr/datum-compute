@@ -4,6 +4,7 @@
 #
 #   bin/teardown               regions from state/regions.txt (or REGIONS="...")
 #   bin/teardown --purge       also delete the shared permissions boundary policy
+#   KEEP_NET=1 bin/teardown    remove the fleet only; keep the network, gateway and viewer
 . "$(dirname "$0")/../lib/common.sh"
 preflight
 PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
@@ -47,15 +48,17 @@ for r in $(regions); do
   dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1
   dc delete serviceaccounts "$n" >/dev/null 2>&1
 done
-"$(dirname "$0")/visual" --delete
-say "deleting gateway $GW and network $NET"
-dc delete connectgateways "$GW" >/dev/null 2>&1
-dc delete networks "$NET" >/dev/null 2>&1
+if [ -z "${KEEP_NET:-}" ]; then
+  "$(dirname "$0")/visual" --delete
+  say "deleting gateway $GW and network $NET"
+  dc delete connectgateways "$GW" >/dev/null 2>&1
+  dc delete networks "$NET" >/dev/null 2>&1
+fi
 warn "check for leftover ConnectGateway quota claims (README, 'Quota'); they need a staff identity to delete"
 
 wait "${pids[@]}"
 if [ "$PURGE" = 1 ]; then
   aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT:policy/$BOUNDARY" 2>&1 | tail -1
 fi
-rm -rf "$STATE_DIR"
+if [ -n "${KEEP_NET:-}" ]; then rm -f "$regions_file"; else rm -rf "$STATE_DIR"; fi
 say "done"

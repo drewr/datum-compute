@@ -11,7 +11,7 @@ bin/status               instances, SSM state, the gateway, each member's addres
 bin/netcheck [REGION]    netcheck on one instance (random if no region)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
-bin/teardown [--purge]   delete everything setup created
+bin/teardown [--purge]   delete everything setup created (KEEP_NET=1 keeps the network, gateway and viewer)
 ```
 
 You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin` (nixpkgs: `ssm-session-manager-plugin`; `bin/login` and `bin/netcheck` fetch it with nix-shell if missing).
