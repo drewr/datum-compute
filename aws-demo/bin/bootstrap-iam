@@ -8,16 +8,16 @@
 # Creates (idempotent, re-run to repair or to pick up a changed iam/*.json):
 #   - the permissions boundary  datum-test-instance-boundary   (iam/boundary.json)
 #   - the operator policy       datum-test-operator            (iam/operator.json)
-#   - the IAM user              alice, with that policy attached
+#   - the IAM user              datum-demo-operator-<UTC timestamp>, with that policy attached
 #   - an access key for it, written to a local profile (never printed)
 #
-# Settings: IAM_USER (alice), OPERATOR_POLICY (datum-test-operator), PROFILE (datum-demo-<account>),
+# Settings: IAM_USER (default: a new timestamped name; a re-run reuses the user its profile already
+# authenticates as), OPERATOR_POLICY (datum-test-operator), PROFILE (datum-demo-<account>),
 # PROFILE_REGION (us-east-2). --yes skips the confirmation; --dry-run changes nothing and only
 # renders and checks the policies.
 . "$(dirname "$0")/../lib/common.sh"
 need aws jq
 
-USER_NAME=${IAM_USER:-alice}
 POLICY=${OPERATOR_POLICY:-datum-test-operator}
 PROFILE_REGION=${PROFILE_REGION:-us-east-2}
 yes= dry=
@@ -34,8 +34,17 @@ CALLER=$(aws sts get-caller-identity --query Arn --output text 2>&1) || die "aws
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 PROFILE=${PROFILE:-datum-demo-$ACCOUNT}
 case $CALLER in
-  *":user/$USER_NAME") die "$CALLER is the operator user itself; run this with an admin profile" ;;
+  *":user/datum-demo-operator-"*) die "$CALLER is an operator user; run this with an admin profile" ;;
 esac
+if [ -z "${IAM_USER:-}" ]; then
+  prev=$(AWS_PROFILE=$PROFILE aws sts get-caller-identity --query Arn --output text 2>/dev/null)
+  case $prev in
+    "arn:aws:iam::$ACCOUNT:user/datum-demo-operator-"*) IAM_USER=${prev##*/} ;;
+    *) IAM_USER=datum-demo-operator-$(date -u +%Y%m%d-%H%M%S) ;;
+  esac
+fi
+USER_NAME=$IAM_USER
+[ "$CALLER" != "arn:aws:iam::$ACCOUNT:user/$USER_NAME" ] || die "$CALLER is the operator user itself; run this with an admin profile"
 
 BARN=arn:aws:iam::$ACCOUNT:policy/$BOUNDARY
 OARN=arn:aws:iam::$ACCOUNT:policy/$POLICY

@@ -85,9 +85,9 @@ export AWS_PROFILE=datum-demo-<account-id>   # the profile it writes; then bin/s
 ```
 
 It creates the permissions boundary (`iam/boundary.json`), the operator policy `datum-test-operator`
-(`iam/operator.json`), the IAM user `alice` with that policy, and an access key written straight to a
+(`iam/operator.json`), a fresh IAM user `datum-demo-operator-<timestamp>` with that policy, and an access key written straight to a
 local profile (`datum-demo-<account-id>`, never printed). Re-running updates a changed policy and
-keeps a working profile. Override with `IAM_USER`, `OPERATOR_POLICY`, `PROFILE`, `PROFILE_REGION`.
+keeps the user and profile if the profile still works. Override with `IAM_USER`, `OPERATOR_POLICY`, `PROFILE`, `PROFILE_REGION`.
 It needs IAM write access, so use an admin identity; it refuses to run as the operator user.
 
 ## 5. What runs on each instance
