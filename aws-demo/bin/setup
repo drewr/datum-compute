@@ -90,7 +90,7 @@ Y
     dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1 || true
     dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey \
       | aws ssm put-parameter --region "$r" --name "/datum-test/$r-1/key" --type SecureString \
-          --value file:///dev/stdin --tags Key=project,Value=$TAG >/dev/null
+          --value file:///dev/stdin --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
 apiVersion: identity.miloapis.com/v1alpha1
 kind: ServiceAccountKey
 metadata: {name: $n-key}
@@ -113,12 +113,12 @@ aws_for() { # region: role, profile, SG, instance (launches across default subne
   local r=$1 n; n=$(inst_name "$r")
   aws iam get-role --role-name "$n" >/dev/null 2>&1 || {
     aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
-      --permissions-boundary "$BARN" --tags Key=project,Value=$TAG >/dev/null
+      --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
   }
   aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
     --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r")"
   aws iam get-instance-profile --instance-profile-name "$n" >/dev/null 2>&1 || {
-    aws iam create-instance-profile --instance-profile-name "$n" >/dev/null
+    aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
     aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n"
   }
   [ -n "$(instance_id "$r")" ] && { instance_id "$r"; return 0; }
@@ -129,7 +129,7 @@ aws_for() { # region: role, profile, SG, instance (launches across default subne
   if [ "$sg" = None ]; then
     # No inbound rules at all; instances are reached only through SSM.
     sg=$(aws ec2 create-security-group --region "$r" --group-name "$n" --description "datum connect test, no inbound" --vpc-id "$vpc" \
-      --tag-specifications "ResourceType=security-group,Tags=[{Key=project,Value=$TAG}]" --query GroupId --output text)
+      --tag-specifications "ResourceType=security-group,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" --query GroupId --output text)
   fi
   ami=$(aws ssm get-parameter --region "$r" --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
   sleep 12 # IAM propagation for the new instance profile
@@ -137,7 +137,7 @@ aws_for() { # region: role, profile, SG, instance (launches across default subne
     out=$(aws ec2 run-instances --region "$r" --image-id "$ami" --instance-type "$INSTANCE_TYPE" --subnet-id "$sub" \
       --security-group-ids "$sg" --iam-instance-profile Name="$n" \
       --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 \
-      --tag-specifications "ResourceType=instance,Tags=[{Key=project,Value=$TAG},{Key=Name,Value=$n}]" "ResourceType=volume,Tags=[{Key=project,Value=$TAG}]" \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET},{Key=Name,Value=$n}]" "ResourceType=volume,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" \
       --query 'Instances[0].InstanceId' --output text 2>&1) && { echo "$out"; return 0; }
     warn "$r: launch in $sub failed: $(tail -1 <<<"$out" | cut -c1-160)"
   done

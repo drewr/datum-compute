@@ -67,7 +67,7 @@ Per region, in the default VPC:
 - a security group with **no inbound rules**;
 - a `t4g.micro` instance running Ubuntu 24.04 arm64 (the connect binaries need glibc 2.39 or later,
   so Amazon Linux 2023 does not work), with IMDSv2 required and a hop limit of 1;
-- every resource tagged `project=datum-connect-test`.
+- every resource tagged `project=datum-connect-test` and `fleet=<FLEET_PREFIX><AWS user name>` (default prefix `drewr-`, so `drewr-demo261009`; set `FLEET_PREFIX` to change it). Resources made before the fleet tag existed lack it.
 
 There is no SSH. You reach an instance through SSM Session Manager (`bin/login`), using the
 `AWS-StartInteractiveCommand` document.

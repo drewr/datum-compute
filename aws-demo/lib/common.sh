@@ -10,7 +10,8 @@ export AWS_PAGER=
 NET=${NET:-aws-test-net}                       # Datum Network (VPC) for the fleet
 GW_LOCATION=${GW_LOCATION:-us-east-1}          # Datum location of the single gateway
 INSTANCE_TYPE=${INSTANCE_TYPE:-t4g.micro}
-TAG=datum-connect-test                         # tag value on every AWS resource we create
+TAG=datum-connect-test                         # project tag value on every AWS resource we create
+FLEET_PREFIX=${FLEET_PREFIX:-drewr-}           # fleet tag value = this + the AWS user's name (see preflight)
 BOUNDARY=datum-test-instance-boundary          # permissions boundary for instance roles
 POOL=${POOL:-"us-east-1 us-east-2 us-west-1 us-west-2 ca-central-1 eu-central-1 eu-west-2 eu-west-3 eu-north-1 ap-northeast-1 ap-southeast-1"}
 API_ENDPOINT=${API_ENDPOINT:-https://api.staging.env.datum.net}
@@ -30,14 +31,16 @@ preflight() {
     die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}: ${err:-no output}
        set AWS_PROFILE (e.g. AWS_PROFILE=alice) or log in with aws sso login / aws configure"
   }
+  local arn; arn=$(aws sts get-caller-identity --query Arn --output text)
+  FLEET=${FLEET_PREFIX}${arn##*/}
   local who; who=$(datumctl whoami 2>/dev/null) || die "datumctl is not logged in"
   ORG=${ORG:-$(sed -n 's/^Organization:.*(\(org-[^)]*\)).*/\1/p' <<<"$who")}
   PROJECT=${PROJECT:-$(sed -n 's/^Project:.*(\(project-[^)]*\)).*/\1/p' <<<"$who")}
   [ -n "$ORG" ] && [ -n "$PROJECT" ] || die "datumctl has no org/project context (datumctl ctx use ORG/PROJECT, or set ORG and PROJECT)"
   PROJECT_UID=$(datumctl get projects "$PROJECT" --organization "$ORG" -o jsonpath='{.metadata.uid}' 2>/dev/null) || true
   [ -n "$PROJECT_UID" ] || die "cannot read project $PROJECT in $ORG"
-  say "aws account $ACCOUNT; datum $ORG/$PROJECT ($API_ENDPOINT)"
-  export ACCOUNT ORG PROJECT PROJECT_UID
+  say "aws account $ACCOUNT, fleet $FLEET; datum $ORG/$PROJECT ($API_ENDPOINT)"
+  export ACCOUNT ORG PROJECT PROJECT_UID FLEET
 }
 
 dc()  { datumctl --project "$PROJECT" "$@"; }       # project-scoped
