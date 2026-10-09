@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Deploy (or refresh) the visual netcheck: a Datum compute instance on the fleet's network that draws
+# every member on a world map with live round-trip times. Safe to re-run; run it after the fleet
+# changes. bin/setup calls it at the end unless VISUAL=0.
+#
+#   bin/visual            install the responders, deploy the viewer, print its URL
+#   bin/visual --delete   remove the viewer workload and its public entry
+#
+# The image comes from visual/IMAGE (see visual/build.sh). The viewer is a general-purpose instance
+# in $GW_LOCATION attached to $NET; each EC2 member runs files/mesh-responder.py on port 8081.
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+APP=${VISUAL_NAME:-aws-mesh-viewer}
+VIEWER_NAME=us-east-1-0                                 # the viewer's own name on the page
+
+if [ "${1:-}" = --delete ]; then
+  for k in httpproxy/$APP networkservice/$APP workload/$APP; do dc delete "$k" >/dev/null 2>&1 && say "deleted $k"; done
+  exit 0
+fi
+
+IMAGE=${IMAGE:-$(cat "$DEMO_DIR/visual/IMAGE" 2>/dev/null)}
+[ -n "$IMAGE" ] || die "no image: run visual/build.sh (or set IMAGE=)"
+[ -n "$(regions)" ] || die "no fleet yet: run bin/setup first"
+GW=connect-$NET-$GW_LOCATION
+
+member_list() { # "name address" lines for the EC2 members, name aws-<region>-0
+  dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" \
+    '.items[] | select(.spec.gatewayRef==$gw) | select(.status.assignedAddress)
+     | select(.spec.connectorRef|test("^aws-test-.*-1$"))
+     | "\(.spec.connectorRef|sub("^aws-test-";"aws-")|sub("-1$";"-0"))  \(.status.assignedAddress|sub("/128";""))"'
+}
+
+viewer_addr() {
+  dc get instances -o json | jq -r --arg w "$APP" \
+    '[.items[] | select(.metadata.labels["compute.datumapis.com/workload-name"]==$w)
+      | .status.networkInterfaces[]?.assignments?.networkIP? // empty] | first // empty' | sed 's,/.*,,'
+}
+
+install_responders() { # $1 = extra "name address port" line for the viewer, or empty; $2 = its address
+  local members; members=$(member_list; [ -n "$1" ] && echo "$1")
+  for r in $(regions); do
+    local iid; iid=$(instance_id "$r"); [ -n "$iid" ] || continue
+    {
+      echo 'cat > /usr/local/bin/mesh-responder <<'"'RESP_EOF'"
+      cat "$DEMO_DIR/files/mesh-responder.py"
+      echo RESP_EOF
+      echo 'chmod 755 /usr/local/bin/mesh-responder'
+      echo 'cat > /etc/systemd/system/mesh-responder.service <<UNIT_EOF
+[Unit]
+Description=Global Mesh peer responder
+After=network-online.target
+[Service]
+ExecStart=/usr/local/bin/mesh-responder
+Restart=always
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF'
+      printf 'echo "aws-%s-0 aws-%s" > /etc/mesh-self\n' "$r" "$r"
+      printf 'cat > /etc/mesh-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
+      [ -n "$2" ] && printf 'echo "http://[%s]:8080/mesh/report %s" > /etc/mesh-push; chmod 600 /etc/mesh-push\n' "$2" "$token"
+      echo 'chmod 644 /etc/mesh-self /etc/mesh-members; systemctl daemon-reload; systemctl enable --now mesh-responder; systemctl restart mesh-responder'
+    } >"$STATE_DIR/mr-$r.sh"
+    ssm_run "$r" "$iid" "$STATE_DIR/mr-$r.sh" 120 >/dev/null && say "$r: responder running" || warn "$r: responder install failed"
+    rm -f "$STATE_DIR/mr-$r.sh"
+  done
+}
+
+token_file=$STATE_DIR/visual.token
+[ -s "$token_file" ] || { umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' >"$token_file"; }
+token=$(cat "$token_file")
+peers=$(member_list | awk '{sub(/-0$/,"",$1); printf "%s%s=%s", (n++?",":""), $1, $2}')
+[ -n "$peers" ] || die "no members have joined $NET yet"
+
+say "installing responders on the EC2 members"
+install_responders "" ""
+
+say "deploying $APP ($IMAGE)"
+dc apply -f - >/dev/null <<YAML
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: $APP
+  namespace: default
+spec:
+  placements:
+  - name: $GW_LOCATION
+    locations:
+    - name: $GW_LOCATION
+    scaleSettings:
+      minReplicas: 1
+  template:
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies: [IPv6]
+        network:
+          name: $NET
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ${PULL_SECRET:-ghcr-drewr}
+          containers:
+          - name: mesh
+            image: $IMAGE
+            ports:
+            - name: http
+              port: 8080
+              protocol: TCP
+            env:
+            - {name: DEMO_MODE, value: live}
+            - {name: MESH_SELF, value: $VIEWER_NAME}
+            - {name: MESH_SELF_LOCATION, value: $GW_LOCATION}
+            - {name: MESH_PORT, value: "8081"}
+            - {name: MESH_PUSH_TOKEN, value: "$token"}
+            - {name: MESH_PEERS, value: "$peers"}
+---
+apiVersion: networking.datumapis.com/v1alpha
+kind: NetworkService
+metadata:
+  name: $APP
+  namespace: default
+spec:
+  networkInterfaces:
+    selector:
+      matchLabels:
+        compute.datumapis.com/workload-name: $APP
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+  trafficDistribution:
+    strategy: Nearest
+---
+apiVersion: networking.datumapis.com/v1alpha
+kind: HTTPProxy
+metadata:
+  name: $APP
+  namespace: default
+spec:
+  rules:
+  - backends:
+    - networkService:
+        name: $APP
+        port: http
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+YAML
+[ $? = 0 ] || die "apply failed"
+
+say "waiting for the viewer to get an address on $NET"
+va=
+for _ in $(seq 60); do va=$(viewer_addr); [ -n "$va" ] && break; sleep 10; done
+if [ -n "$va" ]; then
+  say "viewer address $va; telling the members so they measure it too"
+  install_responders "$VIEWER_NAME $va 8080" "$va"
+else
+  warn "viewer has no address yet; re-run bin/visual later so the members include it"
+fi
+
+url=
+for _ in $(seq 30); do
+  h=$(dc get httpproxy "$APP" -o jsonpath='{.status.hostnames[0]}' 2>/dev/null); [ -n "$h" ] && { url=https://$h; break; }; sleep 5
+done
+say "visual netcheck: ${url:-<hostname not assigned yet: datumctl get httpproxy $APP>}"

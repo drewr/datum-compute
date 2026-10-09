@@ -9,6 +9,7 @@ bin/setup [N]            N random regions from the pool (default 3); re-run to r
 bin/setup --add [N]     add N more random regions to the fleet; REGIONS="a b" adds those
 bin/status               instances, SSM state, the gateway, each member's address
 bin/netcheck [REGION]    netcheck on one instance (random if no region)
+bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
 bin/teardown [--purge]   delete everything setup created
 ```
@@ -128,7 +129,29 @@ The relay times are TLS handshake times to the two staging iroh relays. The memb
 three pings to each other member. The member list is a snapshot from setup; re-run `bin/setup`
 after changing the fleet.
 
-## 8. Tearing down
+## 8. The visual netcheck
+
+`bin/setup` ends by deploying `bin/visual`: a Datum compute instance on the same network that draws
+every member on a world map with live round-trip times. It is the [Global Mesh
+demo](https://github.com/datum-labs/compute-network-demo) (AGPL-3.0, vendored in `visual/`) with three
+changes: AWS regions in the city table, a `MESH_SELF_LOCATION` setting so the viewer can place itself,
+and a push mode (`MESH_PUSH_TOKEN`).
+
+- Each EC2 member runs `files/mesh-responder.py` (systemd, port 8081). It measures a round trip to
+  every other member and to the viewer, and POSTs its report to the viewer every two seconds.
+- Push, not pull, because the viewer can reach a member's address only by replying to it; the members
+  are peer-routed `/128`s that the VPC does not route to. The viewer accepts reports with a shared
+  token (`state/visual.token`), since its public URL is on the internet.
+- The viewer is a `general-purpose` Workload (`aws-mesh-viewer`) in `$GW_LOCATION` on `$NET`, with a
+  NetworkService and an HTTPProxy for the public URL. Latencies are hub-and-spoke through the gateway,
+  the same as netcheck's.
+- The image is built by `visual/build.sh` (docker; pushes `ghcr.io/drewr/global-mesh-aws` using
+  `gh auth token`, needs `write:packages`) and pinned by digest in `visual/IMAGE`. The package is
+  private; the project needs an image pull secret (`PULL_SECRET`, default `ghcr-drewr`).
+- `VISUAL=0 bin/setup` skips it. `bin/visual --delete` removes it; `bin/teardown` does too.
+  Re-run `bin/visual` after the fleet changes.
+
+## 9. Tearing down
 
 `bin/teardown` terminates the instances and deletes, per region, the security group, instance
 profile, role and SSM key; and in Datum, each connector and network binding, policy binding,
@@ -154,9 +177,10 @@ shared permissions boundary policy. The original network and gateway in the proj
 ## Layout and settings
 
 ```
-bin/        setup, teardown, status, login, netcheck
+bin/        setup, teardown, status, login, netcheck, visual
 lib/        common.sh (account/org/project discovery, SSM runner)
-files/      on-instance: install.sh, patch-edge.sh, bootstrap.sh, netcheck
+files/      on-instance: install.sh, patch-edge.sh, bootstrap.sh, netcheck, mesh-responder.py
+visual/     the viewer (Go + React) and build.sh
 iam/        boundary, instance policy, trust, operator policy (templates: __ACCOUNT__, __REGION__)
 state/      git-ignored: chosen regions and logs (logs/<region>.log has each instance's output)
 ```

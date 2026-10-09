@@ -199,4 +199,8 @@ done
 say "members of $NET via $GW:"; echo "$members" | sed 's/^/    /'
 say "run netcheck on a random instance: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/netcheck [region]"
 say "or open a shell: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login <region>   (regions: $(regions | tr '\n' ' '))"
+if [ "${VISUAL:-1}" != 0 ] && [ "$fail" = 0 ]; then
+  if [ -s "$DEMO_DIR/visual/IMAGE" ]; then "$DEMO_DIR/bin/visual" || warn "visual netcheck failed; re-run bin/visual"
+  else warn "no visual/IMAGE; run visual/build.sh then bin/visual for the visual netcheck"; fi
+fi
 exit $fail

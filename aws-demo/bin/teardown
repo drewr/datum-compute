@@ -47,6 +47,7 @@ for r in $(regions); do
   dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1
   dc delete serviceaccounts "$n" >/dev/null 2>&1
 done
+"$(dirname "$0")/visual" --delete
 say "deleting gateway $GW and network $NET"
 dc delete connectgateways "$GW" >/dev/null 2>&1
 dc delete networks "$NET" >/dev/null 2>&1
