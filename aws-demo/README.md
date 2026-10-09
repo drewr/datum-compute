@@ -5,7 +5,8 @@ then measures how far apart they are from each other and from Datum's relays. It
 staging. Everything here is scripted, so you can build it, look at it and tear it down:
 
 ```
-bin/setup [N]            N random regions from the pool (default 3); REGIONS="a b" for a list
+bin/setup [N]            N random regions from the pool (default 3); re-run to repair
+bin/setup --add [N]     add N more random regions to the fleet; REGIONS="a b" adds those
 bin/status               instances, SSM state, the gateway, each member's address
 bin/netcheck [REGION]    netcheck on one instance (random if no region)
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
@@ -153,7 +154,7 @@ shared permissions boundary policy. The original network and gateway in the proj
 ## Layout and settings
 
 ```
-bin/        setup, teardown, status, login
+bin/        setup, teardown, status, login, netcheck
 lib/        common.sh (account/org/project discovery, SSM runner)
 files/      on-instance: install.sh, patch-edge.sh, bootstrap.sh, netcheck
 iam/        boundary, instance policy, trust, operator policy (templates: __ACCOUNT__, __REGION__)

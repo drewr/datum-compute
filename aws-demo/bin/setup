@@ -2,8 +2,9 @@
 # Build the Datum Connect test fleet: N EC2 instances (one per AWS region), each joined to one
 # Datum VPC (Network) through one gateway. Idempotent: re-running resumes/repairs.
 #
-#   bin/setup [N]                   N random regions from the pool (default 3)
-#   REGIONS="us-east-1 eu-west-2" bin/setup     explicit regions (N ignored)
+#   bin/setup [N]                   N random regions from the pool (default 3); with a fleet already, repairs it
+#   bin/setup --add [N]             add N more random regions (default 3) to the existing fleet
+#   REGIONS="us-east-1 eu-west-2" bin/setup     add these regions to the fleet (N ignored)
 #
 # Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
 # (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
@@ -11,18 +12,20 @@
 preflight
 
 # ---- 0. pick regions -------------------------------------------------------------------------
-if [ -s "$regions_file" ]; then
-  say "reusing regions from $regions_file: $(regions | tr '\n' ' ')"
+add=
+[ "${1:-}" = --add ] && { add=1; shift; }
+have=$(regions)
+if [ -n "${REGIONS:-}" ]; then
+  want=$(tr ' ' '\n' <<<"$REGIONS" | sed '/^$/d')
+elif [ -n "$add" ] || [ -z "$have" ]; then
+  # random pool regions not already in the fleet
+  # shellcheck disable=SC2086
+  want=$(tr ' ' '\n' <<<$POOL | grep -vxF -f <(echo "$have"; echo) | shuf -n "${1:-3}")
 else
-  if [ -n "${REGIONS:-}" ]; then
-    tr ' ' '\n' <<<"$REGIONS" | sed '/^$/d' >"$regions_file"
-  else
-    N=${1:-3}
-    # shellcheck disable=SC2086
-    tr ' ' '\n' <<<$POOL | shuf -n "$N" >"$regions_file"
-  fi
-  say "regions: $(regions | tr '\n' ' ')"
+  want=
 fi
+printf '%s\n%s\n' "$have" "$want" | sed '/^$/d' | awk '!seen[$0]++' >"$regions_file.new" && mv "$regions_file.new" "$regions_file"
+say "regions: $(regions | tr '\n' ' ')"
 
 # ---- 1. Datum: network + gateway -------------------------------------------------------------
 if ! dc get networks "$NET" >/dev/null 2>&1; then
