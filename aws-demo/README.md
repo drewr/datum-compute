@@ -11,6 +11,7 @@ bin/status               instances, SSM state, the gateway, each member's addres
 bin/netcheck [REGION]    netcheck on one instance (random if no region)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
+bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
 bin/teardown [--purge]   delete everything setup created (KEEP_NET=1 keeps the network, gateway and viewer)
 ```
 
@@ -73,10 +74,21 @@ There is no SSH. You reach an instance through SSM Session Manager (`bin/login`)
 
 `iam/operator.json` is the least-privilege policy the AWS operator ran under: EC2, IAM and SSM
 actions limited by tag, by the `datum-test-*` name prefix, by the permissions boundary, and by a
-region allow-list matching the default pool. An AWS admin sets this up once; the scripts do not:
-create the boundary policy from `iam/boundary.json` (the operator can only read it), create the
-policy from `iam/operator.json`, and attach it to an IAM user (we use `alice`). Replace `__ACCOUNT__`
-with the account id first.
+region allow-list matching the default pool. An AWS admin sets this up once with `bin/bootstrap-iam`
+(below); after that the admin profile is not needed.
+
+### First-time AWS account setup
+
+```
+AWS_PROFILE=<admin> bin/bootstrap-iam        # --dry-run to preview, --yes to skip the prompt
+export AWS_PROFILE=datum-demo-<account-id>   # the profile it writes; then bin/setup as usual
+```
+
+It creates the permissions boundary (`iam/boundary.json`), the operator policy `datum-test-operator`
+(`iam/operator.json`), the IAM user `alice` with that policy, and an access key written straight to a
+local profile (`datum-demo-<account-id>`, never printed). Re-running updates a changed policy and
+keeps a working profile. Override with `IAM_USER`, `OPERATOR_POLICY`, `PROFILE`, `PROFILE_REGION`.
+It needs IAM write access, so use an admin identity; it refuses to run as the operator user.
 
 ## 5. What runs on each instance
 
@@ -177,7 +189,7 @@ shared permissions boundary policy. The original network and gateway in the proj
 ## Layout and settings
 
 ```
-bin/        setup, teardown, status, login, netcheck, visual
+bin/        bootstrap-iam, setup, teardown, status, login, netcheck, visual
 lib/        common.sh (account/org/project discovery, SSM runner)
 files/      on-instance: install.sh, patch-edge.sh, bootstrap.sh, netcheck, mesh-responder.py
 visual/     the viewer (Go + React) and build.sh

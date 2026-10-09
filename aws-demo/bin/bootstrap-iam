@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# One-time AWS account setup for the demo. Run it with an ADMIN profile (IAM write access); every
+# other script then runs as the limited operator user this creates, and the admin profile is not
+# needed again.
+#
+#   AWS_PROFILE=admin bin/bootstrap-iam [--yes] [--dry-run]
+#
+# Creates (idempotent, re-run to repair or to pick up a changed iam/*.json):
+#   - the permissions boundary  datum-test-instance-boundary   (iam/boundary.json)
+#   - the operator policy       datum-test-operator            (iam/operator.json)
+#   - the IAM user              alice, with that policy attached
+#   - an access key for it, written to a local profile (never printed)
+#
+# Settings: IAM_USER (alice), OPERATOR_POLICY (datum-test-operator), PROFILE (datum-demo-<account>),
+# PROFILE_REGION (us-east-2). --yes skips the confirmation; --dry-run changes nothing and only
+# renders and checks the policies.
+. "$(dirname "$0")/../lib/common.sh"
+need aws jq
+
+USER_NAME=${IAM_USER:-alice}
+POLICY=${OPERATOR_POLICY:-datum-test-operator}
+PROFILE_REGION=${PROFILE_REGION:-us-east-2}
+yes= dry=
+for a in "$@"; do
+  case $a in
+    --yes) yes=1 ;;
+    --dry-run) dry=1 ;;
+    *) die "usage: bin/bootstrap-iam [--yes] [--dry-run]" ;;
+  esac
+done
+
+CALLER=$(aws sts get-caller-identity --query Arn --output text 2>&1) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}: $(tail -1 <<<"$CALLER")
+       run this with an admin profile: AWS_PROFILE=<admin> bin/bootstrap-iam"
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+PROFILE=${PROFILE:-datum-demo-$ACCOUNT}
+case $CALLER in
+  *":user/$USER_NAME") die "$CALLER is the operator user itself; run this with an admin profile" ;;
+esac
+
+BARN=arn:aws:iam::$ACCOUNT:policy/$BOUNDARY
+OARN=arn:aws:iam::$ACCOUNT:policy/$POLICY
+bdoc=$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" | jq -c .) || die "iam/boundary.json does not render to JSON"
+odoc=$(tmpl "$DEMO_DIR/iam/operator.json" ACCOUNT="$ACCOUNT" | jq -c .) || die "iam/operator.json does not render to JSON"
+# IAM counts a managed policy's size without whitespace; the limit is 6144 characters.
+[ "${#odoc}" -le 6144 ] || die "operator policy is ${#odoc} characters; IAM allows 6144"
+
+say "admin identity: $CALLER (account $ACCOUNT)"
+say "will ensure: boundary $BOUNDARY, policy $POLICY, user $USER_NAME, and local profile $PROFILE"
+if [ -n "$dry" ]; then
+  say "dry run: boundary ${#bdoc} chars, operator policy ${#odoc} chars; nothing was changed"
+  exit 0
+fi
+if [ -z "$yes" ]; then
+  [ -t 0 ] || die "not a terminal; pass --yes to confirm account $ACCOUNT"
+  read -r -p "Make these changes in account $ACCOUNT? [y/N] " ok
+  [ "$ok" = y ] || [ "$ok" = Y ] || die "cancelled"
+fi
+
+ensure_policy() { # arn name doc
+  local arn=$1 name=$2 doc=$3 vid cur n oldest
+  if ! aws iam get-policy --policy-arn "$arn" >/dev/null 2>&1; then
+    say "creating policy $name"
+    aws iam create-policy --policy-name "$name" --policy-document "$doc" --tags Key=project,Value="$TAG" >/dev/null || die "cannot create policy $name"
+    return
+  fi
+  vid=$(aws iam get-policy --policy-arn "$arn" --query Policy.DefaultVersionId --output text)
+  cur=$(aws iam get-policy-version --policy-arn "$arn" --version-id "$vid" --query PolicyVersion.Document --output json)
+  if [ "$(jq -S . <<<"$cur")" = "$(jq -S . <<<"$doc")" ]; then
+    say "policy $name is up to date"
+    return
+  fi
+  n=$(aws iam list-policy-versions --policy-arn "$arn" --query 'length(Versions)' --output text)
+  if [ "$n" -ge 5 ]; then # IAM keeps at most 5 versions
+    oldest=$(aws iam list-policy-versions --policy-arn "$arn" --query 'sort_by(Versions[?IsDefaultVersion==`false`],&CreateDate)[0].VersionId' --output text)
+    aws iam delete-policy-version --policy-arn "$arn" --version-id "$oldest" || die "cannot prune old versions of $name"
+  fi
+  say "updating policy $name to a new version"
+  aws iam create-policy-version --policy-arn "$arn" --policy-document "$doc" --set-as-default >/dev/null || die "cannot update policy $name"
+}
+
+ensure_policy "$BARN" "$BOUNDARY" "$bdoc"
+ensure_policy "$OARN" "$POLICY" "$odoc"
+
+if aws iam get-user --user-name "$USER_NAME" >/dev/null 2>&1; then
+  say "user $USER_NAME exists"
+else
+  say "creating user $USER_NAME"
+  aws iam create-user --user-name "$USER_NAME" --tags Key=project,Value="$TAG" >/dev/null || die "cannot create user $USER_NAME"
+fi
+aws iam attach-user-policy --user-name "$USER_NAME" --policy-arn "$OARN" || die "cannot attach $POLICY to $USER_NAME"
+
+want=arn:aws:iam::$ACCOUNT:user/$USER_NAME
+if [ "$(AWS_PROFILE=$PROFILE aws sts get-caller-identity --query Arn --output text 2>/dev/null)" = "$want" ]; then
+  say "local profile $PROFILE already works as $USER_NAME; no new key"
+else
+  n=$(aws iam list-access-keys --user-name "$USER_NAME" --query 'length(AccessKeyMetadata)' --output text)
+  [ "$n" -lt 2 ] || die "$USER_NAME already has 2 access keys and profile $PROFILE does not work.
+       Delete a stale one (aws iam list-access-keys / delete-access-key --user-name $USER_NAME), then re-run."
+  say "creating an access key for $USER_NAME"
+  out=$(aws iam create-access-key --user-name "$USER_NAME" --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text) || die "cannot create an access key"
+  read -r key_id key_secret <<<"$out"; out=
+  cred=${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}
+  mkdir -p "$(dirname "$cred")"; touch "$cred"; chmod 600 "$cred"
+  # replace an old section of the same name; the secret goes to the file, never to a command line
+  tmp=$(mktemp "$cred.XXXXXX"); chmod 600 "$tmp"
+  awk -v p="[$PROFILE]" '$0==p{skip=1; next} /^\[/{skip=0} !skip' "$cred" >"$tmp"
+  { [ -s "$tmp" ] && echo; printf '[%s]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$PROFILE" "$key_id" "$key_secret"; } >>"$tmp"
+  mv "$tmp" "$cred"; key_secret=
+  aws configure set region "$PROFILE_REGION" --profile "$PROFILE"
+  say "wrote profile $PROFILE to $cred"
+fi
+
+say "waiting for the new key to become valid"
+for _ in $(seq 20); do
+  [ "$(AWS_PROFILE=$PROFILE aws sts get-caller-identity --query Arn --output text 2>/dev/null)" = "$want" ] && ok=1 && break
+  sleep 3
+done
+[ -n "${ok:-}" ] || die "profile $PROFILE does not authenticate as $want yet; re-run in a minute"
+
+say "done. The admin profile is no longer needed; remove or deactivate its credentials."
+say "use the demo with:  export AWS_PROFILE=$PROFILE"
