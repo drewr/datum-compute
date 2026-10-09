@@ -149,7 +149,7 @@ onbox() { # region iid: install, patch, enrol, join
   {
     printf 'REGION=%q CONNECTOR=%q NET=%q PROJECT=%q API_ENDPOINT=%q TOKEN_URI=%q GW_LOCATION=%q\n' \
       "$r" "$(sa_name "$r")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
-    cat "$DEMO_DIR/files/install.sh" "$DEMO_DIR/files/patch-edge.sh" "$DEMO_DIR/files/bootstrap.sh"
+    cat "$DEMO_DIR/files/install.sh" "$DEMO_DIR/files/patch-edge.sh" "$DEMO_DIR/files/tune-net.sh" "$DEMO_DIR/files/bootstrap.sh"
   } >"$f"
   ssm_run "$r" "$iid" "$f" 1500
   local rc=$?; rm -f "$f"; return $rc
