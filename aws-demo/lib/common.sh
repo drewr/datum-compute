@@ -24,7 +24,12 @@ need() { for c in "$@"; do command -v "$c" >/dev/null || die "missing command: $
 
 preflight() {
   need aws datumctl jq
-  ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || die "aws is not logged in"
+  local err
+  ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>&1) || {
+    err=$(tail -1 <<<"$ACCOUNT")
+    die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}: ${err:-no output}
+       set AWS_PROFILE (e.g. AWS_PROFILE=alice) or log in with aws sso login / aws configure"
+  }
   local who; who=$(datumctl whoami 2>/dev/null) || die "datumctl is not logged in"
   ORG=${ORG:-$(sed -n 's/^Organization:.*(\(org-[^)]*\)).*/\1/p' <<<"$who")}
   PROJECT=${PROJECT:-$(sed -n 's/^Project:.*(\(project-[^)]*\)).*/\1/p' <<<"$who")}
