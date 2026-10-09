@@ -57,7 +57,7 @@ sa_name()   { echo "aws-test-$1-1"; }                # Datum-side name (SA/conne
 
 instance_id() { # region -> id of the live instance
   aws ec2 describe-instances --region "$1" \
-    --filters "Name=tag:Name,Values=$(inst_name "$1")" "Name=tag:project,Values=$TAG" \
+    --filters "Name=tag:Name,Values=$(inst_name "$1")" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=${FLEET:?}" \
               Name=instance-state-name,Values=pending,running,stopping,stopped \
     --query 'Reservations[].Instances[].InstanceId' --output text | awk '{print $1}'
 }
