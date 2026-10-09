@@ -27,7 +27,7 @@
       "Sid": "ReadBoundaryPolicy",
       "Effect": "Allow",
       "Action": "iam:GetPolicy",
-      "Resource": "arn:aws:iam::__ACCOUNT__:policy/datum-test-instance-boundary"
+      "Resource": "arn:aws:iam::__ACCOUNT__:policy/__BOUNDARY__"
     },
     {
       "Sid": "LaunchTaggedInstances",
@@ -122,10 +122,10 @@
       "Action": [
         "iam:CreateRole"
       ],
-      "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*",
       "Condition": {
         "StringEquals": {
-          "iam:PermissionsBoundary": "arn:aws:iam::__ACCOUNT__:policy/datum-test-instance-boundary"
+          "iam:PermissionsBoundary": "arn:aws:iam::__ACCOUNT__:policy/__BOUNDARY__"
         }
       }
     },
@@ -133,7 +133,7 @@
       "Sid": "TagInstanceRoles",
       "Effect": "Allow",
       "Action": "iam:TagRole",
-      "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*"
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*"
     },
     {
       "Sid": "InstanceRoleInlinePolicies",
@@ -143,7 +143,7 @@
         "iam:DeleteRolePolicy",
         "iam:DeleteRole"
       ],
-      "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*"
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*"
     },
     {
       "Sid": "InstanceProfiles",
@@ -155,13 +155,13 @@
         "iam:RemoveRoleFromInstanceProfile",
         "iam:TagInstanceProfile"
       ],
-      "Resource": "arn:aws:iam::__ACCOUNT__:instance-profile/datum-test-*"
+      "Resource": "arn:aws:iam::__ACCOUNT__:instance-profile/__FLEET_PREFIX__${aws:username}-*"
     },
     {
       "Sid": "PassOnlyToEc2",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::__ACCOUNT__:role/datum-test-*",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*",
       "Condition": {
         "StringEquals": {
           "iam:PassedToService": "ec2.amazonaws.com"
@@ -177,7 +177,7 @@
         "ssm:DeleteParameter",
         "ssm:AddTagsToResource"
       ],
-      "Resource": "arn:aws:ssm:*:__ACCOUNT__:parameter/datum-test/*"
+      "Resource": "arn:aws:ssm:*:__ACCOUNT__:parameter/__FLEET_PREFIX__${aws:username}/*"
     },
     {
       "Sid": "ReachOwnInstances",

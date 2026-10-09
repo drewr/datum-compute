@@ -19,6 +19,14 @@ You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `sessio
 The AWS account comes from `aws sts get-caller-identity` and the Datum org and project from
 `datumctl whoami` (override with `ORG=` and `PROJECT=`). Run `bin/setup` again to resume or repair.
 
+**Fleet name.** Every resource, AWS and Datum, is named after the fleet: `FLEET_PREFIX` (default
+`drewr-`) plus the AWS user name, lowercased, such as `drewr-demo261009`. Members are
+`<fleet>-<region>`, the network is `<fleet>-net` and state lives in `state/<fleet>/`, so fleets of
+different users can run side by side in one account and Datum project. The Datum gateway quota (3 on
+staging) and `bin/teardown --purge` (it deletes the account's shared boundary policy) are the limits.
+Set `FLEET` to override the name. The operator policy grants only names that start with
+`<FLEET_PREFIX><user name>-`, so re-run `bin/bootstrap-iam` after changing the naming.
+
 The rest of this file explains how the pieces fit together, in the order you would build them by hand.
 
 ## 1. The idea
@@ -34,8 +42,8 @@ instances themselves.
 ## 2. A network and one gateway
 
 ```
-Network         aws-test-net                    IPv6 /48 allocated by Datum, mtu 1440
-ConnectGateway  connect-aws-test-net-us-east-1  class standard, peerRouting true, routes = the /48
+Network         <fleet>-net                     IPv6 /48 allocated by Datum, mtu 1440
+ConnectGateway  connect-<fleet>-net-us-east-1   class standard, peerRouting true, routes = the /48
 ```
 
 `peerRouting: true` is what lets members reach each other, not just the gateway. A member only
@@ -50,9 +58,9 @@ Staging has only two Datum locations, `us-central-1` and `us-east-1`; the gatewa
 
 Each instance gets its own service account so it can be attributed and revoked on its own:
 
-- a `ServiceAccount` `aws-test-<region>-1`;
+- a `ServiceAccount` `<fleet>-<region>`;
 - a `ServiceAccountKey`, whose private key is returned once and piped straight into AWS SSM
-  Parameter Store as a SecureString at `/datum-test/<region>-1/key`. It is never printed or
+  Parameter Store as a SecureString at `/<fleet>/<region>/key`. It is never printed or
   written to disk, and never put in user-data;
 - a `PolicyBinding` to the `editor` role on the project. `editor` is the only assignable role
   that inherits connect admin on staging, so it is broader than we would like (see the end).
@@ -61,8 +69,8 @@ Each instance gets its own service account so it can be attributed and revoked o
 
 Per region, in the default VPC:
 
-- an IAM role and instance profile `datum-test-<region>-1` under the permissions boundary
-  `datum-test-instance-boundary`. The role can read only its own key parameter (and decrypt via SSM)
+- an IAM role and instance profile `<fleet>-<region>` under the permissions boundary
+  `<prefix>boundary`. The role can read only its own key parameter (and decrypt via SSM)
   and talk to Systems Manager. It cannot do anything else;
 - a security group with **no inbound rules**;
 - a `t4g.micro` instance running Ubuntu 24.04 arm64 (the connect binaries need glibc 2.39 or later,
@@ -73,7 +81,7 @@ There is no SSH. You reach an instance through SSM Session Manager (`bin/login`)
 `AWS-StartInteractiveCommand` document.
 
 `iam/operator.json` is the least-privilege policy the AWS operator ran under: EC2, IAM and SSM
-actions limited by tag, by the `datum-test-*` name prefix, by the permissions boundary, and by a
+actions limited by tag, by the operator's own fleet name (`<prefix><user>-*`, using the IAM policy variable `aws:username`), by the permissions boundary, and by a
 region allow-list matching the default pool. An AWS admin sets this up once with `bin/bootstrap-iam`
 (below); after that the admin profile is not needed.
 
@@ -84,7 +92,7 @@ AWS_PROFILE=<admin> bin/bootstrap-iam        # --dry-run to preview, --yes to sk
 export AWS_PROFILE=datum-demo-<account-id>   # the profile it writes; then bin/setup as usual
 ```
 
-It creates the permissions boundary (`iam/boundary.json`), the operator policy `datum-test-operator`
+It creates the permissions boundary (`iam/boundary.json`), the operator policy `<prefix>operator`
 (`iam/operator.json`), a fresh IAM user `demoYYMMDD` with that policy, and an access key written straight to a
 local profile (`datum-demo-<account-id>`, never printed). Re-running updates a changed policy and
 keeps the user and profile if the profile still works. Override with `IAM_USER`, `OPERATOR_POLICY`, `PROFILE`, `PROFILE_REGION`.
@@ -100,8 +108,8 @@ It needs IAM write access, so use an admin identity; it refuses to run as the op
 3. `files/bootstrap.sh`: fetches the instance's key from SSM and builds a credentials file by adding
    `project_id`, `api_endpoint` and `token_uri`; installs the network helper with the exact default
    managed policy (a narrowed one is rejected); runs the daemon as the non-root user `datum`
-   under a user systemd service with lingering; enrols with `connect up --name aws-test-<region>-1`
-   (names must be unique, hostnames collide); runs `connect join aws-test-net`; and finally
+   under a user systemd service with lingering; enrols with `connect up --name <fleet>-<region>`
+   (names must be unique, hostnames collide); runs `connect join <fleet>-net`; and finally
    deletes the key and credentials.
 
 ## 6. Making all instances use the one gateway
@@ -124,10 +132,10 @@ After the joins, setup installs `/usr/local/bin/netcheck` and a list of members 
 $ bin/login eu-west-2 netcheck
 Report:
     * This machine's region: eu-west-2
-    * Connector: aws-test-eu-west-2-1
+    * Connector: <fleet>-eu-west-2
     * IPv4: ...            * IPv6: no
     * Edge-reported location: ...
-    * VPC: aws-test-net   address: fd20:...
+    * VPC: <fleet>-net   address: fd20:...
     * Gateway: ...
     * Transport: ...
     * Relay latency (TLS):
@@ -154,7 +162,7 @@ and a push mode (`MESH_PUSH_TOKEN`).
 - Push, not pull, because the viewer can reach a member's address only by replying to it; the members
   are peer-routed `/128`s that the VPC does not route to. The viewer accepts reports with a shared
   token (`state/visual.token`), since its public URL is on the internet.
-- The viewer is a `general-purpose` Workload (`aws-mesh-viewer`) in `$GW_LOCATION` on `$NET`, with a
+- The viewer is a `general-purpose` Workload (`<fleet>-viewer`) in `$GW_LOCATION` on `$NET`, with a
   NetworkService and an HTTPProxy for the public URL. Latencies are hub-and-spoke through the gateway,
   the same as netcheck's.
 - The image is built by `visual/build.sh` (docker; pushes `ghcr.io/drewr/global-mesh-aws` using

@@ -1,4 +1,4 @@
 {"Version":"2012-10-17","Statement":[
- {"Effect":"Allow","Action":"ssm:GetParameter","Resource":"arn:aws:ssm:__REGION__:__ACCOUNT__:parameter/datum-test/__REGION__-1/key"},
+ {"Effect":"Allow","Action":"ssm:GetParameter","Resource":"arn:aws:ssm:__REGION__:__ACCOUNT__:parameter__KEYPARAM__"},
  {"Effect":"Allow","Action":"kms:Decrypt","Resource":"*","Condition":{"StringLike":{"kms:ViaService":"ssm.__REGION__.amazonaws.com"}}},
  {"Effect":"Allow","Action":["ssm:UpdateInstanceInformation","ssmmessages:CreateControlChannel","ssmmessages:CreateDataChannel","ssmmessages:OpenControlChannel","ssmmessages:OpenDataChannel","ec2messages:AcknowledgeMessage","ec2messages:DeleteMessage","ec2messages:FailMessage","ec2messages:GetEndpoint","ec2messages:GetMessages","ec2messages:SendReply"],"Resource":"*"}]}

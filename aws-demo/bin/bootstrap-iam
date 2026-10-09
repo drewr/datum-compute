@@ -6,19 +6,21 @@
 #   AWS_PROFILE=admin bin/bootstrap-iam [--yes] [--dry-run]
 #
 # Creates (idempotent, re-run to repair or to pick up a changed iam/*.json):
-#   - the permissions boundary  datum-test-instance-boundary   (iam/boundary.json)
-#   - the operator policy       datum-test-operator            (iam/operator.json)
+#   - the permissions boundary  <FLEET_PREFIX>boundary         (iam/boundary.json)
+#   - the operator policy       <FLEET_PREFIX>operator         (iam/operator.json)
 #   - the IAM user              demoYYMMDD, with that policy attached
 #   - an access key for it, written to a local profile (never printed)
 #
+# The operator policy lets a user manage only resources named <FLEET_PREFIX><its own user name>-*, so
+# FLEET_PREFIX must be the same here and when running bin/setup.
 # Settings: IAM_USER (default: a new timestamped name; a re-run reuses the user its profile already
-# authenticates as), OPERATOR_POLICY (datum-test-operator), PROFILE (datum-demo-<account>),
+# authenticates as), OPERATOR_POLICY (<FLEET_PREFIX>operator), PROFILE (datum-demo-<account>),
 # PROFILE_REGION (us-east-2). --yes skips the confirmation; --dry-run changes nothing and only
 # renders and checks the policies.
 . "$(dirname "$0")/../lib/common.sh"
 need aws jq
 
-POLICY=${OPERATOR_POLICY:-datum-test-operator}
+POLICY=${OPERATOR_POLICY:-${FLEET_PREFIX}operator}
 PROFILE_REGION=${PROFILE_REGION:-us-east-2}
 yes= dry=
 for a in "$@"; do
@@ -48,8 +50,8 @@ USER_NAME=$IAM_USER
 
 BARN=arn:aws:iam::$ACCOUNT:policy/$BOUNDARY
 OARN=arn:aws:iam::$ACCOUNT:policy/$POLICY
-bdoc=$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" | jq -c .) || die "iam/boundary.json does not render to JSON"
-odoc=$(tmpl "$DEMO_DIR/iam/operator.json" ACCOUNT="$ACCOUNT" | jq -c .) || die "iam/operator.json does not render to JSON"
+bdoc=$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" FLEET_PREFIX="$FLEET_PREFIX" | jq -c .) || die "iam/boundary.json does not render to JSON"
+odoc=$(tmpl "$DEMO_DIR/iam/operator.json" ACCOUNT="$ACCOUNT" BOUNDARY="$BOUNDARY" FLEET_PREFIX="$FLEET_PREFIX" | jq -c .) || die "iam/operator.json does not render to JSON"
 # IAM counts a managed policy's size without whitespace; the limit is 6144 characters.
 [ "${#odoc}" -le 6144 ] || die "operator policy is ${#odoc} characters; IAM allows 6144"
 

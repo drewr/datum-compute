@@ -1,10 +1,10 @@
 # On-instance step 3 (root): fetch this instance's Datum key from SSM, enrol, join the VPC, delete secrets.
-# Header supplies: REGION CONNECTOR NET PROJECT API_ENDPOINT TOKEN_URI
+# Header supplies: REGION CONNECTOR KEYPARAM NET PROJECT API_ENDPOINT TOKEN_URI
 set -e
 umask 077
 export HOME=/root
 mkdir -p /run/datum
-aws ssm get-parameter --region "$REGION" --name "/datum-test/$REGION-1/key" --with-decryption --query Parameter.Value --output text > /run/datum/key.json
+aws ssm get-parameter --region "$REGION" --name "$KEYPARAM" --with-decryption --query Parameter.Value --output text > /run/datum/key.json
 jq --arg p "$PROJECT" --arg a "$API_ENDPOINT" --arg t "$TOKEN_URI" '. + {project_id:$p, api_endpoint:$a, token_uri:$t}' /run/datum/key.json > /run/datum/connect-cred.json
 id datum >/dev/null 2>&1 || useradd -m -s /bin/bash datum
 U=$(id -u datum)

@@ -3,16 +3,13 @@
 # sessions; override with environment variables.
 set -uo pipefail
 DEMO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-STATE_DIR=${STATE_DIR:-$DEMO_DIR/state}
-mkdir -p "$STATE_DIR/logs"
 export AWS_PAGER=
 
-NET=${NET:-aws-test-net}                       # Datum Network (VPC) for the fleet
 GW_LOCATION=${GW_LOCATION:-us-east-1}          # Datum location of the single gateway
 INSTANCE_TYPE=${INSTANCE_TYPE:-t4g.micro}
 TAG=datum-connect-test                         # project tag value on every AWS resource we create
-FLEET_PREFIX=${FLEET_PREFIX:-drewr-}           # fleet tag value = this + the AWS user's name (see preflight)
-BOUNDARY=datum-test-instance-boundary          # permissions boundary for instance roles
+FLEET_PREFIX=${FLEET_PREFIX:-drewr-}           # FLEET = this + the AWS user's name (see set_fleet); names everything
+BOUNDARY=${FLEET_PREFIX}boundary                # permissions boundary for instance roles (one per account)
 POOL=${POOL:-"us-east-1 us-east-2 us-west-1 us-west-2 ca-central-1 eu-central-1 eu-west-2 eu-west-3 eu-north-1 ap-northeast-1 ap-southeast-1"}
 API_ENDPOINT=${API_ENDPOINT:-https://api.staging.env.datum.net}
 TOKEN_URI=${TOKEN_URI:-https://auth.staging.env.datum.net/oauth/v2/token}
@@ -23,9 +20,18 @@ die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 need() { for c in "$@"; do command -v "$c" >/dev/null || die "missing command: $c (try: nix-shell -p $c)"; done; }
 
-set_fleet() { # FLEET = FLEET_PREFIX + the AWS caller's user (or session) name
+# FLEET = FLEET_PREFIX + the AWS caller's user name, lowercased. It names every resource (AWS and
+# Datum), the Datum network and the state directory, so fleets of different operators, or of one
+# operator under different users, can run side by side. Set FLEET to override.
+set_fleet() {
   local arn; arn=$(aws sts get-caller-identity --query Arn --output text) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}"
-  FLEET=${FLEET_PREFIX}${arn##*/}; export FLEET
+  [ -n "${FLEET:-}" ] || FLEET=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
+  [ "${#FLEET}" -le 40 ] || die "fleet name $FLEET is longer than 40 characters; set a shorter FLEET_PREFIX or FLEET"
+  NET=${NET:-$FLEET-net}                          # Datum Network (VPC) for the fleet
+  STATE_DIR=${STATE_DIR:-$DEMO_DIR/state/$FLEET}
+  mkdir -p "$STATE_DIR/logs"
+  regions_file=$STATE_DIR/regions.txt
+  export FLEET NET STATE_DIR
 }
 
 preflight() {
@@ -50,18 +56,17 @@ preflight() {
 dc()  { datumctl --project "$PROJECT" "$@"; }       # project-scoped
 dco() { datumctl --organization "$ORG" "$@"; }      # org-scoped (PolicyBindings)
 
-regions_file=$STATE_DIR/regions.txt
 regions() { cat "$regions_file" 2>/dev/null; }
 
 # tmpl FILE KEY=VAL...  -> FILE with __KEY__ replaced
 tmpl() { local f=$1 s; shift; s=$(cat "$f"); for kv in "$@"; do s=${s//__${kv%%=*}__/${kv#*=}}; done; printf '%s\n' "$s"; }
 
-inst_name() { echo "datum-test-$1-1"; }              # AWS-side name (role/profile/SG/Name tag)
-sa_name()   { echo "aws-test-$1-1"; }                # Datum-side name (SA/connector/binding)
+member()    { echo "$FLEET-$1"; }                      # region -> name of that member everywhere (role, profile, SG, Name tag, ServiceAccount, connector)
+key_param() { echo "/$FLEET/$1/key"; }                 # region -> SSM parameter holding that member's Datum key
 
 instance_id() { # region -> id of the live instance
   aws ec2 describe-instances --region "$1" \
-    --filters "Name=tag:Name,Values=$(inst_name "$1")" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=${FLEET:?}" \
+    --filters "Name=tag:Name,Values=$(member "$1")" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=${FLEET:?}" \
               Name=instance-state-name,Values=pending,running,stopping,stopped \
     --query 'Reservations[].Instances[].InstanceId' --output text | awk '{print $1}'
 }

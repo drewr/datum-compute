@@ -13,7 +13,7 @@ PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
 GW=connect-$NET-$GW_LOCATION
 
 aws_down() {
-  local r=$1 n; n=$(inst_name "$r")
+  local r=$1 n; n=$(member "$r")
   local ids; ids=$(aws ec2 describe-instances --region "$r" --filters "Name=tag:Name,Values=$n" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" \
     Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
   if [ -n "$ids" ]; then
@@ -33,7 +33,7 @@ aws_down() {
   aws iam delete-instance-profile --instance-profile-name "$n" 2>/dev/null
   aws iam delete-role-policy --role-name "$n" --policy-name own-key-and-ssm 2>/dev/null
   aws iam delete-role --role-name "$n" 2>/dev/null
-  aws ssm delete-parameter --region "$r" --name "/datum-test/$r-1/key" 2>/dev/null
+  aws ssm delete-parameter --region "$r" --name "$(key_param "$r")" 2>/dev/null
   return 0
 }
 
@@ -44,7 +44,7 @@ for r in $(regions); do
 done
 
 for r in $(regions); do
-  n=$(sa_name "$r"); say "$r: Datum teardown"
+  n=$(member "$r"); say "$r: Datum teardown"
   for b in $(dc get connectnetworkbindings -o json | jq -r --arg c "$n" '.items[]|select(.spec.connectorRef==$c)|.metadata.name'); do
     dc delete connectnetworkbindings "$b" >/dev/null 2>&1
   done

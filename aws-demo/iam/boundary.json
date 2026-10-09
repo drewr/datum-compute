@@ -5,7 +5,7 @@
       "Sid": "ReadOwnDatumKey",
       "Effect": "Allow",
       "Action": ["ssm:GetParameter"],
-      "Resource": "arn:aws:ssm:*:__ACCOUNT__:parameter/datum-test/*"
+      "Resource": "arn:aws:ssm:*:__ACCOUNT__:parameter/__FLEET_PREFIX__*/*"
     },
     {
       "Sid": "DecryptViaSsmOnly",

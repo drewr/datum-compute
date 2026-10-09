@@ -44,7 +44,7 @@ d=$(mktemp -d)
 while read n a; do [ "$n" = "$me" ] && continue
   ( v=$(ping -6 -c3 -W2 -q "$a" 2>/dev/null | awk -F/ '/^rtt/{print $5}'); echo "${v:-9999} $n $a" > $d/$n ) &
 done < $MEMBERS; wait
-rows=$(cat $d/* | sort -n | awk '{ n=$2; sub(/^aws-test-/,"",n); sub(/-1$/,"",n); printf "%s\t%s\t%s\n", $3, n, ($1==9999 ? "unreachable" : sprintf("%.1fms",$1)) }')
+rows=$(cat $d/* | sort -n | awk -v f="$FLEET" '{ n=$2; sub("^" f "-","",n); printf "%s\t%s\t%s\n", $3, n, ($1==9999 ? "unreachable" : sprintf("%.1fms",$1)) }')
 cw=0; while IFS=$'\t' read -r a r t; do c=$(city "$r"); [ ${#c} -gt $cw ] && cw=${#c}; done <<<"$rows"
 aw=$(echo "$rows" | awk -F'\t' '{ if (length($1)>w) w=length($1) } END{print w}'); rw=$(echo "$rows" | awk -F'\t' '{ if (length($2)>w) w=length($2) } END{print w}')
 while IFS=$'\t' read -r a r t; do printf '        - %-*s\t%-*s\t%-*s\t%s\n' "$aw" "$a" "$rw" "$r" "$cw" "$(city "$r")" "$t"; done <<<"$rows"

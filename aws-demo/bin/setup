@@ -66,12 +66,12 @@ fi
 BARN=arn:aws:iam::$ACCOUNT:policy/$BOUNDARY
 if ! aws iam get-policy --policy-arn "$BARN" >/dev/null 2>&1; then
   say "creating permissions boundary $BOUNDARY"
-  aws iam create-policy --policy-name "$BOUNDARY" --policy-document "$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT")" >/dev/null
+  aws iam create-policy --policy-name "$BOUNDARY" --policy-document "$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" FLEET_PREFIX="$FLEET_PREFIX")" >/dev/null
 fi
 
 # ---- 3. per region: Datum identity + AWS instance --------------------------------------------
 sa_for() { # region: ServiceAccount, key -> SSM, PolicyBinding
-  local r=$1 n; n=$(sa_name "$r")
+  local r=$1 n; n=$(member "$r")
   dc get serviceaccounts "$n" >/dev/null 2>&1 || dc create --validate=false -f - >/dev/null <<Y
 apiVersion: iam.miloapis.com/v1alpha1
 kind: ServiceAccount
@@ -85,11 +85,11 @@ Y
     [ -n "$uid" ] && [ -n "$email" ] && break; sleep 2
   done
   [ -n "$uid" ] && [ -n "$email" ] || die "service account $n never became ready"
-  if ! aws ssm get-parameter --region "$r" --name "/datum-test/$r-1/key" >/dev/null 2>&1; then
+  if ! aws ssm get-parameter --region "$r" --name "$(key_param "$r")" >/dev/null 2>&1; then
     # The private key is only ever returned once; it goes straight into SSM and is never printed.
     dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1 || true
     dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey \
-      | aws ssm put-parameter --region "$r" --name "/datum-test/$r-1/key" --type SecureString \
+      | aws ssm put-parameter --region "$r" --name "$(key_param "$r")" --type SecureString \
           --value file:///dev/stdin --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
 apiVersion: identity.miloapis.com/v1alpha1
 kind: ServiceAccountKey
@@ -110,13 +110,13 @@ Y
 }
 
 aws_for() { # region: role, profile, SG, instance (launches across default subnets until one works)
-  local r=$1 n; n=$(inst_name "$r")
+  local r=$1 n; n=$(member "$r")
   aws iam get-role --role-name "$n" >/dev/null 2>&1 || {
     aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
       --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
   }
   aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
-    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r")"
+    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$r")")"
   aws iam get-instance-profile --instance-profile-name "$n" >/dev/null 2>&1 || {
     aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
     aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n"
@@ -147,8 +147,8 @@ aws_for() { # region: role, profile, SG, instance (launches across default subne
 onbox() { # region iid: install, patch, enrol, join
   local r=$1 iid=$2 f; f=$STATE_DIR/onbox-$r.sh
   {
-    printf 'REGION=%q CONNECTOR=%q NET=%q PROJECT=%q API_ENDPOINT=%q TOKEN_URI=%q GW_LOCATION=%q\n' \
-      "$r" "$(sa_name "$r")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
+    printf 'REGION=%q CONNECTOR=%q KEYPARAM=%q NET=%q PROJECT=%q API_ENDPOINT=%q TOKEN_URI=%q GW_LOCATION=%q\n' \
+      "$r" "$(member "$r")" "$(key_param "$r")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
     cat "$DEMO_DIR/files/install.sh" "$DEMO_DIR/files/patch-edge.sh" "$DEMO_DIR/files/tune-net.sh" "$DEMO_DIR/files/bootstrap.sh"
   } >"$f"
   ssm_run "$r" "$iid" "$f" 1500
@@ -178,7 +178,7 @@ done
 
 # ---- 4. netcheck + member list on every instance ---------------------------------------------
 say "installing netcheck"
-members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --argjson names "$(regions | jq -R '"aws-test-\(.)-1"' | jq -s .)" \
+members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --arg fleet "$FLEET" --argjson names "$(regions | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
   '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
    | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"')
 [ -n "$members" ] || warn "no network bindings found yet; re-run bin/setup once the joins settle"
@@ -189,7 +189,7 @@ for r in $(regions); do
     cat "$DEMO_DIR/files/netcheck"
     echo NETCHECK_EOF
     echo 'chmod 755 /usr/local/bin/netcheck'
-    printf 'echo PROJECT=%q > /etc/netcheck.conf\n' "$PROJECT"
+    printf 'printf "%%s\\n" %q %q > /etc/netcheck.conf\n' "PROJECT=$PROJECT" "FLEET=$FLEET"
     printf 'cat > /etc/netcheck-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
   } >"$STATE_DIR/nc-$r.sh"
   ssm_run "$r" "$iid" "$STATE_DIR/nc-$r.sh" 120 >/dev/null || warn "$r: netcheck install failed"

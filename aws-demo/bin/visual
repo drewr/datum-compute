@@ -10,7 +10,7 @@
 # in $GW_LOCATION attached to $NET; each EC2 member runs files/mesh-responder.py on port 8081.
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-APP=${VISUAL_NAME:-aws-mesh-viewer}
+APP=${VISUAL_NAME:-$FLEET-viewer}
 VIEWER_NAME=us-east-1-0                                 # the viewer's own name on the page
 
 if [ "${1:-}" = --delete ]; then
@@ -24,10 +24,10 @@ IMAGE=${IMAGE:-$(cat "$DEMO_DIR/visual/IMAGE" 2>/dev/null)}
 GW=connect-$NET-$GW_LOCATION
 
 member_list() { # "name address" lines for the EC2 members, name aws-<region>-0
-  dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" \
+  dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --arg f "$FLEET-" \
     '.items[] | select(.spec.gatewayRef==$gw) | select(.status.assignedAddress)
-     | select(.spec.connectorRef|test("^aws-test-.*-1$"))
-     | "\(.spec.connectorRef|sub("^aws-test-";"aws-")|sub("-1$";"-0"))  \(.status.assignedAddress|sub("/128";""))"'
+     | select(.spec.connectorRef|startswith($f))
+     | "aws-\(.spec.connectorRef|ltrimstr($f))-0  \(.status.assignedAddress|sub("/128";""))"'
 }
 
 viewer_addr() {

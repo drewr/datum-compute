@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # bin/netcheck [REGION]   run netcheck on one instance (random one from the fleet if no region given).
 . "$(dirname "$0")/../lib/common.sh"
+set_fleet
 r=${1:-$(regions | shuf -n1)}
 [ -n "$r" ] || die "no regions; run bin/setup first"
 say "netcheck on $r"
