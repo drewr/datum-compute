@@ -7,6 +7,7 @@ if ! command -v session-manager-plugin >/dev/null; then
   exec nix-shell -p ssm-session-manager-plugin --run "$(printf '%q ' "$0" "$@")"
 fi
 r=${1:?usage: login REGION [command...]}; shift
+set_fleet
 iid=$(instance_id "$r"); [ -n "$iid" ] || die "no instance in $r"
 # The operator policy only allows these documents, not SSM-SessionManagerRunShell.
 cmd=${*:-bash -l}

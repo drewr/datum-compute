@@ -23,6 +23,11 @@ die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 need() { for c in "$@"; do command -v "$c" >/dev/null || die "missing command: $c (try: nix-shell -p $c)"; done; }
 
+set_fleet() { # FLEET = FLEET_PREFIX + the AWS caller's user (or session) name
+  local arn; arn=$(aws sts get-caller-identity --query Arn --output text) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}"
+  FLEET=${FLEET_PREFIX}${arn##*/}; export FLEET
+}
+
 preflight() {
   need aws datumctl jq
   local err
@@ -31,8 +36,7 @@ preflight() {
     die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}: ${err:-no output}
        set AWS_PROFILE (e.g. AWS_PROFILE=alice) or log in with aws sso login / aws configure"
   }
-  local arn; arn=$(aws sts get-caller-identity --query Arn --output text)
-  FLEET=${FLEET_PREFIX}${arn##*/}
+  set_fleet
   local who; who=$(datumctl whoami 2>/dev/null) || die "datumctl is not logged in"
   ORG=${ORG:-$(sed -n 's/^Organization:.*(\(org-[^)]*\)).*/\1/p' <<<"$who")}
   PROJECT=${PROJECT:-$(sed -n 's/^Project:.*(\(project-[^)]*\)).*/\1/p' <<<"$who")}
