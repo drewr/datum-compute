@@ -1,0 +1,29 @@
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: ubuntu-kata
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-east-1
+    scaleSettings:
+      minReplicas: 1
+  template:
+    spec:
+      networkInterfaces:
+      - name: eth0
+        network:
+          name: default
+        ipFamilies: [IPv6]
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ghcr-drewr
+          containers:
+          - name: app
+            image: ghcr.io/drewr/ubuntu-gp@sha256:ac96d4f20cbeca67dc76c94bd922754c25325dc586aa3f9e466abaa0c1f7425f

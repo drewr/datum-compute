@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Build the Datum Connect test fleet: N EC2 instances (one per AWS region), each joined to one
+# Datum VPC (Network) through one gateway. Idempotent: re-running resumes/repairs.
+#
+#   bin/setup [N]                   N random regions from the pool (default 3); with a fleet already, repairs it
+#   bin/setup --add [N]             add N more random regions (default 3) to the existing fleet
+#   REGIONS="us-east-1 eu-west-2" bin/setup     add these regions to the fleet (N ignored)
+#
+# Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
+# (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+
+# ---- 0. pick regions -------------------------------------------------------------------------
+add=
+[ "${1:-}" = --add ] && { add=1; shift; }
+have=$(regions)
+if [ -n "${REGIONS:-}" ]; then
+  want=$(tr ' ' '\n' <<<"$REGIONS" | sed '/^$/d')
+elif [ -n "$add" ] || [ -z "$have" ]; then
+  # random pool regions not already in the fleet
+  # shellcheck disable=SC2086
+  want=$(tr ' ' '\n' <<<$POOL | grep -vxF -f <(echo "$have"; echo) | shuf -n "${1:-3}")
+else
+  want=
+fi
+printf '%s\n%s\n' "$have" "$want" | sed '/^$/d' | awk '!seen[$0]++' >"$regions_file.new" && mv "$regions_file.new" "$regions_file"
+say "regions: $(regions | tr '\n' ' ')"
+
+# ---- 1. Datum: network + gateway -------------------------------------------------------------
+if ! dc get networks "$NET" >/dev/null 2>&1; then
+  say "creating Network $NET"
+  dc create --validate=false -f - <<Y
+apiVersion: networking.datumapis.com/v1alpha
+kind: Network
+metadata: {name: $NET, namespace: default}
+spec: {ipFamilies: [IPv6], ipam: {mode: Auto}, mtu: 1440}
+Y
+fi
+PREFIX=""
+for _ in $(seq 30); do
+  PREFIX=$(dc get networks "$NET" -o jsonpath='{.status.ipam.ipv6Prefix}' 2>/dev/null); [ -n "$PREFIX" ] && break; sleep 2
+done
+[ -n "$PREFIX" ] || die "network $NET got no IPv6 prefix"
+GW=connect-$NET-$GW_LOCATION
+if ! dc get connectgateways "$GW" >/dev/null 2>&1; then
+  say "creating ConnectGateway $GW (routes $PREFIX)"
+  # NOTE: the ConnectGateway quota is small (3 on staging). If this is denied with 403, see README.
+  dc create --validate=false -f - <<Y
+apiVersion: connect.datumapis.com/v1alpha1
+kind: ConnectGateway
+metadata: {name: $GW, namespace: default}
+spec:
+  gatewayClassRef: standard
+  locationRef: $GW_LOCATION
+  networkRef: $NET
+  peerRouting: true
+  relayURLs:
+  - https://iroh-relay.us-central-1.datum-staging.net
+  - https://iroh-relay.us-east-1.datum-staging.net
+  routes: ["$PREFIX"]
+Y
+fi
+
+# ---- 2. AWS: permissions boundary (shared) ---------------------------------------------------
+BARN=arn:aws:iam::$ACCOUNT:policy/$BOUNDARY
+if ! aws iam get-policy --policy-arn "$BARN" >/dev/null 2>&1; then
+  say "creating permissions boundary $BOUNDARY"
+  aws iam create-policy --policy-name "$BOUNDARY" --policy-document "$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" FLEET_PREFIX="$FLEET_PREFIX")" >/dev/null
+fi
+
+# ---- 3. per region: Datum identity + AWS instance --------------------------------------------
+sa_for() { # region: ServiceAccount, key -> SSM, PolicyBinding
+  local r=$1 n; n=$(member "$r")
+  dc get serviceaccounts "$n" >/dev/null 2>&1 || dc create --validate=false -f - >/dev/null <<Y
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata: {name: $n}
+spec: {state: Active}
+Y
+  local uid="" email="" i
+  for i in $(seq 30); do
+    uid=$(dc get serviceaccounts "$n" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+    email=$(dc get serviceaccounts "$n" -o jsonpath='{.status.email}' 2>/dev/null)
+    [ -n "$uid" ] && [ -n "$email" ] && break; sleep 2
+  done
+  [ -n "$uid" ] && [ -n "$email" ] || die "service account $n never became ready"
+  if ! aws ssm get-parameter --region "$r" --name "$(key_param "$r")" >/dev/null 2>&1; then
+    # The private key is only ever returned once; it goes straight into SSM and is never printed.
+    dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1 || true
+    dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey \
+      | aws ssm put-parameter --region "$r" --name "$(key_param "$r")" --type SecureString \
+          --value file:///dev/stdin --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
+apiVersion: identity.miloapis.com/v1alpha1
+kind: ServiceAccountKey
+metadata: {name: $n-key}
+spec: {serviceAccountUserName: $email}
+Y
+  fi
+  # `editor` is the only assignable role that inherits connect admin on staging (broad; see README).
+  dco get policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1 || dco create --validate=false -n "organization-$ORG" -f - >/dev/null <<Y
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata: {name: $n-editor, namespace: organization-$ORG}
+spec:
+  resourceSelector: {resourceRef: {apiGroup: resourcemanager.miloapis.com, kind: Project, name: $PROJECT, uid: $PROJECT_UID}}
+  roleRef: {name: editor, namespace: datum-cloud}
+  subjects: [{kind: ServiceAccount, name: $n, uid: $uid}]
+Y
+}
+
+aws_for() { # region: role, profile, SG, instance (launches across default subnets until one works)
+  local r=$1 n; n=$(member "$r")
+  aws iam get-role --role-name "$n" >/dev/null 2>&1 || {
+    aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
+      --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
+  }
+  aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
+    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$r")")"
+  aws iam get-instance-profile --instance-profile-name "$n" >/dev/null 2>&1 || {
+    aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
+    aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n"
+  }
+  [ -n "$(instance_id "$r")" ] && { instance_id "$r"; return 0; }
+  local vpc sg ami sub out
+  vpc=$(aws ec2 describe-vpcs --region "$r" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
+  [ "$vpc" != None ] || { warn "$r has no default VPC"; return 1; }
+  sg=$(aws ec2 describe-security-groups --region "$r" --filters Name=group-name,Values="$n" Name=vpc-id,Values="$vpc" --query 'SecurityGroups[0].GroupId' --output text)
+  if [ "$sg" = None ]; then
+    # No inbound rules at all; instances are reached only through SSM.
+    sg=$(aws ec2 create-security-group --region "$r" --group-name "$n" --description "datum connect test, no inbound" --vpc-id "$vpc" \
+      --tag-specifications "ResourceType=security-group,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" --query GroupId --output text)
+  fi
+  ami=$(aws ssm get-parameter --region "$r" --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
+  sleep 12 # IAM propagation for the new instance profile
+  for sub in $(aws ec2 describe-subnets --region "$r" --filters Name=vpc-id,Values="$vpc" Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text); do
+    out=$(aws ec2 run-instances --region "$r" --image-id "$ami" --instance-type "$INSTANCE_TYPE" --subnet-id "$sub" \
+      --security-group-ids "$sg" --iam-instance-profile Name="$n" \
+      --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET},{Key=Name,Value=$n}]" "ResourceType=volume,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" \
+      --query 'Instances[0].InstanceId' --output text 2>&1) && { echo "$out"; return 0; }
+    warn "$r: launch in $sub failed: $(tail -1 <<<"$out" | cut -c1-160)"
+  done
+  return 1
+}
+
+onbox() { # region iid: install, patch, enrol, join
+  local r=$1 iid=$2 f; f=$STATE_DIR/onbox-$r.sh
+  {
+    printf 'REGION=%q CONNECTOR=%q KEYPARAM=%q NET=%q PROJECT=%q API_ENDPOINT=%q TOKEN_URI=%q GW_LOCATION=%q\n' \
+      "$r" "$(member "$r")" "$(key_param "$r")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
+    cat "$DEMO_DIR/files/install.sh" "$DEMO_DIR/files/patch-edge.sh" "$DEMO_DIR/files/tune-net.sh" "$DEMO_DIR/files/bootstrap.sh"
+  } >"$f"
+  ssm_run "$r" "$iid" "$f" 1500
+  local rc=$?; rm -f "$f"; return $rc
+}
+
+one_region() {
+  local r=$1 iid
+  sa_for "$r" || return 1
+  iid=$(aws_for "$r") || return 1
+  say "$r: instance $iid; installing and joining"
+  onbox "$r" "$iid"
+}
+
+pids=()
+for r in $(regions); do
+  say "$r: starting"
+  ( one_region "$r" >"$STATE_DIR/logs/$r.log" 2>&1; echo $? >"$STATE_DIR/logs/$r.rc" ) &
+  pids+=($!)
+done
+wait "${pids[@]}"
+fail=0
+for r in $(regions); do
+  rc=$(cat "$STATE_DIR/logs/$r.rc" 2>/dev/null || echo 1)
+  if [ "$rc" = 0 ]; then say "$r: ok"; else warn "$r: FAILED (see $STATE_DIR/logs/$r.log)"; fail=1; fi
+done
+
+# ---- 4. netcheck + member list on every instance ---------------------------------------------
+say "installing netcheck"
+members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --arg fleet "$FLEET" --argjson names "$(regions | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
+  '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
+   | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"')
+[ -n "$members" ] || warn "no network bindings found yet; re-run bin/setup once the joins settle"
+for r in $(regions); do
+  iid=$(instance_id "$r"); [ -n "$iid" ] || continue
+  {
+    echo 'cat > /usr/local/bin/netcheck <<'"'NETCHECK_EOF'"
+    cat "$DEMO_DIR/files/netcheck"
+    echo NETCHECK_EOF
+    echo 'chmod 755 /usr/local/bin/netcheck'
+    printf 'printf "%%s\\n" %q %q > /etc/netcheck.conf\n' "PROJECT=$PROJECT" "FLEET=$FLEET"
+    printf 'cat > /etc/netcheck-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
+  } >"$STATE_DIR/nc-$r.sh"
+  ssm_run "$r" "$iid" "$STATE_DIR/nc-$r.sh" 120 >/dev/null || warn "$r: netcheck install failed"
+  rm -f "$STATE_DIR/nc-$r.sh"
+done
+
+say "members of $NET via $GW:"; echo "$members" | sed 's/^/    /'
+say "run netcheck on a random instance: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/netcheck [region]"
+say "or open a shell: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login <region>   (regions: $(regions | tr '\n' ' '))"
+if [ "${VISUAL:-1}" != 0 ] && [ "$fail" = 0 ]; then
+  if [ -s "$DEMO_DIR/visual/IMAGE" ]; then "$DEMO_DIR/bin/visual" || warn "visual netcheck failed; re-run bin/visual"
+  else warn "no visual/IMAGE; run visual/build.sh then bin/visual for the visual netcheck"; fi
+fi
+exit $fail

@@ -1,0 +1,243 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ssm:DescribeInstanceInformation",
+        "ssm:DescribeParameters",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "iam:GetRole",
+        "iam:GetInstanceProfile",
+        "iam:ListRolePolicies",
+        "iam:GetRolePolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PublicAmiLookup",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:*::parameter/aws/service/*"
+    },
+    {
+      "Sid": "ReadBoundaryPolicy",
+      "Effect": "Allow",
+      "Action": "iam:GetPolicy",
+      "Resource": "arn:aws:iam::__ACCOUNT__:policy/__BOUNDARY__"
+    },
+    {
+      "Sid": "LaunchTaggedInstances",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:*:__ACCOUNT__:instance/*",
+        "arn:aws:ec2:*:__ACCOUNT__:volume/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/project": "datum-connect-test"
+        }
+      }
+    },
+    {
+      "Sid": "LaunchSupportingResources",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:*::image/*",
+        "arn:aws:ec2:*:__ACCOUNT__:subnet/*",
+        "arn:aws:ec2:*:__ACCOUNT__:network-interface/*",
+        "arn:aws:ec2:*:__ACCOUNT__:security-group/*"
+      ]
+    },
+    {
+      "Sid": "TagOnCreateOnly",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:*:__ACCOUNT__:*/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "RunInstances",
+            "CreateSecurityGroup"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageOwnInstances",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:TerminateInstances",
+        "ec2:StopInstances",
+        "ec2:StartInstances",
+        "ec2:RebootInstances"
+      ],
+      "Resource": "arn:aws:ec2:*:__ACCOUNT__:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/project": "datum-connect-test"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedSecurityGroup",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:__ACCOUNT__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/project": "datum-connect-test"
+        }
+      }
+    },
+    {
+      "Sid": "CreateSecurityGroupInVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:aws:ec2:*:__ACCOUNT__:vpc/*"
+    },
+    {
+      "Sid": "ManageOwnSecurityGroupEgressOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress"
+      ],
+      "Resource": "arn:aws:ec2:*:__ACCOUNT__:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/project": "datum-connect-test"
+        }
+      }
+    },
+    {
+      "Sid": "InstanceRolesWithBoundary",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole"
+      ],
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::__ACCOUNT__:policy/__BOUNDARY__"
+        }
+      }
+    },
+    {
+      "Sid": "TagInstanceRoles",
+      "Effect": "Allow",
+      "Action": "iam:TagRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*"
+    },
+    {
+      "Sid": "InstanceRoleInlinePolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole"
+      ],
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*"
+    },
+    {
+      "Sid": "InstanceProfiles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::__ACCOUNT__:instance-profile/__FLEET_PREFIX__${aws:username}-*"
+    },
+    {
+      "Sid": "PassOnlyToEc2",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::__ACCOUNT__:role/__FLEET_PREFIX__${aws:username}-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "DatumKeyParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter",
+        "ssm:DeleteParameter",
+        "ssm:AddTagsToResource"
+      ],
+      "Resource": "arn:aws:ssm:*:__ACCOUNT__:parameter/__FLEET_PREFIX__${aws:username}/*"
+    },
+    {
+      "Sid": "ReachOwnInstances",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartSession",
+        "ssm:SendCommand",
+        "ssm:TerminateSession"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:__ACCOUNT__:instance/*",
+        "arn:aws:ssm:*::document/AWS-RunShellScript",
+        "arn:aws:ssm:*::document/AWS-StartInteractiveCommand",
+        "arn:aws:ssm:*::document/SSM-SessionManagerRunShell"
+      ],
+      "Condition": {
+        "StringEqualsIfExists": {
+          "aws:ResourceTag/project": "datum-connect-test"
+        }
+      }
+    },
+    {
+      "Sid": "EncryptViaSsmOnly",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": "ssm.*.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "OnlyTestRegions",
+      "Effect": "Deny",
+      "NotAction": [
+        "iam:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": [
+            "eu-west-3",
+            "eu-west-2",
+            "ap-southeast-1",
+            "ap-northeast-1",
+            "eu-central-1",
+            "ca-central-1",
+            "us-west-1",
+            "us-east-1",
+            "us-west-2",
+            "eu-north-1",
+            "us-east-2"
+          ]
+        }
+      }
+    }
+  ]
+}

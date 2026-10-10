@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# bin/status: fleet overview from AWS and Datum.
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+GW=connect-$NET-$GW_LOCATION
+printf '%-16s %-20s %-10s %s\n' REGION INSTANCE STATE SSM
+for r in $(regions); do
+  iid=$(instance_id "$r")
+  st=$(aws ec2 describe-instances --region "$r" --instance-ids "${iid:-i-none}" --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
+  p=$(aws ssm describe-instance-information --region "$r" --filters Key=InstanceIds,Values="${iid:-i-none}" --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null)
+  printf '%-16s %-20s %-10s %s\n' "$r" "${iid:--}" "${st:--}" "${p:--}"
+done
+echo; dc get connectgateways "$GW" 2>&1 | head -3
+echo; dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" '.items[]|select(.spec.gatewayRef==$gw)|"\(.spec.connectorRef)\t\(.status.assignedAddress // "-")"'

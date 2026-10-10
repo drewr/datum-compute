@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# netcheck: concise Datum Connect report (underlay, relays, VPC attachment, member latency)
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+PROJECT=project-xx4hh
+[ -r /etc/netcheck.conf ] && . /etc/netcheck.conf
+MEMBERS=/etc/netcheck-members
+T=/home/datum/.local/state/datumctl/connect/daemon/daemon_auth/setup.token
+st=$(runuser -u datum -- env HOME=/home/datum XDG_RUNTIME_DIR=/run/user/$(id -u datum) datumctl connect status --project $PROJECT --token-file $T 2>&1)
+me=$(echo "$st" | awk '/^Connector:/{print $2}')
+net=$(echo "$st" | awk '/^Network /{gsub(":","",$2); print $2}')
+addr=$(echo "$st" | sed -n 's/^Network [^:]*: connected, \([^ ]*\) on \([^ ]*\) .*/\1 \2/p')
+gw=$(echo "$st" | sed -n 's/.*VPC gateway: \([^ ]*\) (\([^)]*\)).*/\1 \2/p')
+tr=$(echo "$st" | sed -n 's/.*Transport: \([^;]*\); IP datagram capacity: \([0-9]*\) bytes; MTU errors: \([0-9]*\).*/\1 mtu=\2 errs=\3/p')
+v4=$(curl -4 -s -m3 https://checkip.amazonaws.com); v6=$(curl -6 -s -m3 https://api64.ipify.org 2>/dev/null)
+edge=$(curl -s -m3 https://edge.datum.net/ | sed -n 's/^region=//p')
+tok=$(curl -s -m2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+region=$(curl -s -m2 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/placement/region)
+ms() { awk -v v="$1" 'BEGIN{ if (v=="") print ""; else printf "%.1fms", v*1000 }'; }
+city() { case $1 in
+  us-east-1) echo Ashburn;; us-east-2) echo Columbus;; us-west-1) echo "San Francisco";; us-west-2) echo Portland;;
+  us-central-1) echo Dallas;; ca-central-1) echo Montreal;; ca-west-1) echo Calgary;; sa-east-1) echo "Sao Paulo";;
+  eu-west-1) echo Dublin;; eu-west-2) echo London;; eu-west-3) echo Paris;; eu-central-1) echo Frankfurt;;
+  eu-central-2) echo Zurich;; eu-north-1) echo Stockholm;; eu-south-1) echo Milan;; eu-south-2) echo Zaragoza;;
+  me-south-1) echo Manama;; me-central-1) echo Dubai;; il-central-1) echo "Tel Aviv";; af-south-1) echo "Cape Town";;
+  ap-south-1) echo Mumbai;; ap-south-2) echo Hyderabad;; ap-southeast-1) echo Singapore;; ap-southeast-2) echo Sydney;;
+  ap-southeast-3) echo Jakarta;; ap-southeast-4) echo Melbourne;; ap-northeast-1) echo Tokyo;; ap-northeast-2) echo Seoul;;
+  ap-northeast-3) echo Osaka;; ap-east-1) echo "Hong Kong";; *) echo ?;; esac; }
+echo "Report:"
+echo "    * This machine's region: ${region:-?} ($(city "$region"))"
+echo "    * Connector: ${me:-?}"
+echo "    * IPv4: ${v4:-(none)}"
+echo "    * IPv6: ${v6:-no}"
+echo "    * Edge-reported location: ${edge:-?} ($(city "$edge"))"
+echo "    * VPC: ${net:-not joined}   address: ${addr% *}"
+echo "    * Gateway: ${gw:-none}"
+echo "    * Transport: ${tr:-?}"
+echo "    * Relay latency (TLS):"
+for r in us-central-1 us-east-1; do
+  t=$(curl -so /dev/null -m4 -w '%{time_appconnect}' https://iroh-relay.$r.datum-staging.net/ 2>/dev/null)
+  printf '        - %-12s %-9s = %s\n' "$r" "($(city "$r"))" "$(ms "$t")"
+done
+echo "    * VPC member latency:"
+d=$(mktemp -d)
+while read n a; do [ "$n" = "$me" ] && continue
+  ( v=$(ping -6 -c3 -W2 -q "$a" 2>/dev/null | awk -F/ '/^rtt/{print $5}'); echo "${v:-9999} $n $a" > $d/$n ) &
+done < $MEMBERS; wait
+rows=$(cat $d/* | sort -n | awk -v f="$FLEET" '{ n=$2; sub("^" f "-","",n); printf "%s\t%s\t%s\n", $3, n, ($1==9999 ? "unreachable" : sprintf("%.1fms",$1)) }')
+cw=0; while IFS=$'\t' read -r a r t; do c=$(city "$r"); [ ${#c} -gt $cw ] && cw=${#c}; done <<<"$rows"
+aw=$(echo "$rows" | awk -F'\t' '{ if (length($1)>w) w=length($1) } END{print w}'); rw=$(echo "$rows" | awk -F'\t' '{ if (length($2)>w) w=length($2) } END{print w}')
+while IFS=$'\t' read -r a r t; do printf '        - %-*s\t%-*s\t%-*s\t%s\n' "$aw" "$a" "$rw" "$r" "$cw" "$(city "$r")" "$t"; done <<<"$rows"
+rm -rf $d
