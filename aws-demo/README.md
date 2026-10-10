@@ -33,7 +33,8 @@ The rest of this file explains how the pieces fit together, in the order you wou
 
 Datum Connect lets a machine anywhere join a Datum VPC over iroh (QUIC, relayed when it cannot go
 direct). A device runs a small daemon, enrols with Datum as a *connector*, and joins a *network*.
-Datum assigns it an IPv6 `/128` from the network's prefix and routes traffic to the other members
+The gateway gives it an IPv6 `/128` (a hash of the project, network and device keys, so it lies outside the
+network's prefix) and routes traffic to the other members
 through a *gateway*, a workload running in a Datum location.
 
 So the demo needs three things: a network and gateway in Datum, an identity per instance, and the
