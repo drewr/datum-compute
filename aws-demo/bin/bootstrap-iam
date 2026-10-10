@@ -14,7 +14,7 @@
 # The operator policy lets a user manage only resources named <FLEET_PREFIX><its own user name>-*, so
 # FLEET_PREFIX must be the same here and when running bin/setup.
 # Settings: IAM_USER (default: a new timestamped name; a re-run reuses the user its profile already
-# authenticates as), OPERATOR_POLICY (<FLEET_PREFIX>operator), PROFILE (datum-demo-<account>),
+# authenticates as), OPERATOR_POLICY (<FLEET_PREFIX>operator), PROFILE (the user name; a re-run keeps the profile it finds),
 # PROFILE_REGION (us-east-2). --yes skips the confirmation; --dry-run changes nothing and only
 # renders and checks the policies.
 . "$(dirname "$0")/../lib/common.sh"
@@ -34,17 +34,21 @@ done
 CALLER=$(aws sts get-caller-identity --query Arn --output text 2>&1) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}: $(tail -1 <<<"$CALLER")
        run this with an admin profile: AWS_PROFILE=<admin> bin/bootstrap-iam"
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-PROFILE=${PROFILE:-datum-demo-$ACCOUNT}
 case $CALLER in
   *":user/demo"[0-9][0-9][0-9][0-9][0-9][0-9]) die "$CALLER is an operator user (demoYYMMDD); run this with an admin profile" ;;
 esac
+# A re-run reuses the operator user (and its profile) that an existing profile already authenticates as.
 if [ -z "${IAM_USER:-}" ]; then
-  prev=$(AWS_PROFILE=$PROFILE aws sts get-caller-identity --query Arn --output text 2>/dev/null)
-  case $prev in
-    "arn:aws:iam::$ACCOUNT:user/demo"[0-9][0-9][0-9][0-9][0-9][0-9]) IAM_USER=${prev##*/} ;;
-    *) IAM_USER=demo$(date -u +%y%m%d) ;;
-  esac
+  while read -r p; do
+    [ -z "${PROFILE:-}" ] || [ "$p" = "$PROFILE" ] || continue
+    prev=$(AWS_PROFILE=$p aws sts get-caller-identity --query Arn --output text 2>/dev/null)
+    case $prev in
+      "arn:aws:iam::$ACCOUNT:user/demo"[0-9][0-9][0-9][0-9][0-9][0-9]) IAM_USER=${prev##*/}; PROFILE=$p; break ;;
+    esac
+  done < <(aws configure list-profiles 2>/dev/null)
+  IAM_USER=${IAM_USER:-demo$(date -u +%y%m%d)}
 fi
+PROFILE=${PROFILE:-$IAM_USER}
 USER_NAME=$IAM_USER
 [ "$CALLER" != "arn:aws:iam::$ACCOUNT:user/$USER_NAME" ] || die "$CALLER is the operator user itself; run this with an admin profile"
 

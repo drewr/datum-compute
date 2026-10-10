@@ -90,12 +90,12 @@ region allow-list matching the default pool. An AWS admin sets this up once with
 
 ```
 AWS_PROFILE=<admin> bin/bootstrap-iam        # --dry-run to preview, --yes to skip the prompt
-export AWS_PROFILE=datum-demo-<account-id>   # the profile it writes; then bin/setup as usual
+export AWS_PROFILE=demoYYMMDD               # the profile it writes, named after the user; then bin/setup as usual
 ```
 
 It creates the permissions boundary (`iam/boundary.json`), the operator policy `<prefix>operator`
 (`iam/operator.json`), a fresh IAM user `demoYYMMDD` with that policy, and an access key written straight to a
-local profile (`datum-demo-<account-id>`, never printed). Re-running updates a changed policy and
+local profile of the same name (never printed). Re-running updates a changed policy and
 keeps the user and profile if the profile still works. Override with `IAM_USER`, `OPERATOR_POLICY`, `PROFILE`, `PROFILE_REGION`.
 It needs IAM write access, so use an admin identity; it refuses to run as the operator user.
 
