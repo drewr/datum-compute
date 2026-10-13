@@ -30,7 +30,7 @@ set_fleet() {
   NET=${NET:-$FLEET-net}                          # Datum Network (VPC) for the fleet
   STATE_DIR=${STATE_DIR:-$DEMO_DIR/state/$FLEET}
   mkdir -p "$STATE_DIR/logs"
-  regions_file=$STATE_DIR/regions.txt
+  nodes_file=$STATE_DIR/nodes.txt
   export FLEET NET STATE_DIR
 }
 
@@ -56,16 +56,32 @@ preflight() {
 dc()  { datumctl --project "$PROJECT" "$@"; }       # project-scoped
 dco() { datumctl --organization "$ORG" "$@"; }      # org-scoped (PolicyBindings)
 
-regions() { cat "$regions_file" 2>/dev/null; }
+# A node is one EC2 instance, named <region>-<n> (n counts per region from 0): us-east-1-0, eu-west-2-3.
+# state/<fleet>/nodes.txt lists them, one per line.
+nodes()       { cat "$nodes_file" 2>/dev/null; }
+node_region() { echo "${1%-*}"; }
+node_index()  { echo "${1##*-}"; }
+regions()     { nodes | sed 's/-[0-9]*$//' | awk '!s[$0]++'; }
+
+# resolve_node X -> a node: X itself, or the first node in region X
+resolve_node() {
+  local x=$1
+  if nodes | grep -qxF -- "$x"; then echo "$x"; return 0; fi
+  nodes | awk -v r="$x" '{ s=$0; sub(/-[0-9]+$/,"",s) } s==r{print; exit}' | grep . && return 0
+  die "no node or region '$x' in this fleet (nodes: $(nodes | tr '\n' ' '))"
+}
+
+# throttle: wait until fewer than ${JOBS:-12} background jobs are running
+throttle() { while [ "$(jobs -rp | wc -l)" -ge "${JOBS:-12}" ]; do wait -n; done; }
 
 # tmpl FILE KEY=VAL...  -> FILE with __KEY__ replaced
 tmpl() { local f=$1 s; shift; s=$(cat "$f"); for kv in "$@"; do s=${s//__${kv%%=*}__/${kv#*=}}; done; printf '%s\n' "$s"; }
 
-member()    { echo "$FLEET-$1"; }                      # region -> name of that member everywhere (role, profile, SG, Name tag, ServiceAccount, connector)
-key_param() { echo "/$FLEET/$1/key"; }                 # region -> SSM parameter holding that member's Datum key
+member()    { echo "$FLEET-$1"; }                      # node -> name of that member everywhere (role, profile, SG, Name tag, ServiceAccount, connector)
+key_param() { echo "/$FLEET/$(node_region "$1")/$(node_index "$1")/key"; }   # node -> SSM parameter holding that member's Datum key
 
-instance_id() { # region -> id of the live instance
-  aws ec2 describe-instances --region "$1" \
+instance_id() { # node -> id of the live instance
+  aws ec2 describe-instances --region "$(node_region "$1")" \
     --filters "Name=tag:Name,Values=$(member "$1")" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=${FLEET:?}" \
               Name=instance-state-name,Values=pending,running,stopping,stopped \
     --query 'Reservations[].Instances[].InstanceId' --output text | awk '{print $1}'

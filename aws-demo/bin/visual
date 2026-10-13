@@ -20,14 +20,18 @@ fi
 
 IMAGE=${IMAGE:-$(cat "$DEMO_DIR/visual/IMAGE" 2>/dev/null)}
 [ -n "$IMAGE" ] || die "no image: run visual/build.sh (or set IMAGE=)"
-[ -n "$(regions)" ] || die "no fleet yet: run bin/setup first"
+[ -n "$(nodes)" ] || die "no fleet yet: run bin/setup first"
 GW=connect-$NET-$GW_LOCATION
 
-member_list() { # "name address" lines for the EC2 members, name aws-<region>-0
+# "name address connector" lines for the EC2 members. The viewer names a peer <location>-<its position
+# among that location's peers>, so we list sorted by region then node index and name them to match.
+member_list() {
   dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --arg f "$FLEET-" \
-    '.items[] | select(.spec.gatewayRef==$gw) | select(.status.assignedAddress)
-     | select(.spec.connectorRef|startswith($f))
-     | "aws-\(.spec.connectorRef|ltrimstr($f))-0  \(.status.assignedAddress|sub("/128";""))"'
+    '[.items[] | select(.spec.gatewayRef==$gw) | select(.status.assignedAddress)
+      | select(.spec.connectorRef|startswith($f))
+      | (.spec.connectorRef|ltrimstr($f)) as $id | select($id|test("-[0-9]+$"))
+      | {c:.spec.connectorRef, a:(.status.assignedAddress|sub("/128";"")), r:($id|sub("-[0-9]+$";"")), n:($id|capture("-(?<n>[0-9]+)$").n|tonumber)}]
+     | sort_by([.r,.n]) | group_by(.r) | .[] | to_entries[] | "aws-\(.value.r)-\(.key)  \(.value.a)  \(.value.c)"'
 }
 
 viewer_addr() {
@@ -37,15 +41,26 @@ viewer_addr() {
 }
 
 install_responders() { # $1 = extra "name address port" line for the viewer, or empty; $2 = its address
-  local members; members=$(member_list; [ -n "$1" ] && echo "$1")
-  for r in $(regions); do
-    local iid; iid=$(instance_id "$r"); [ -n "$iid" ] || continue
-    {
-      echo 'cat > /usr/local/bin/mesh-responder <<'"'RESP_EOF'"
-      cat "$DEMO_DIR/files/mesh-responder.py"
-      echo RESP_EOF
-      echo 'chmod 755 /usr/local/bin/mesh-responder'
-      echo 'cat > /etc/systemd/system/mesh-responder.service <<UNIT_EOF
+  local members nd; members=$(awk '{print $1, $2}' <<<"$ML"; [ -n "$1" ] && echo "$1")
+  for nd in $(nodes); do
+    throttle
+    ( install_one "$nd" "$members" "$2" ) &
+  done
+  wait
+}
+
+install_one() { # node, members text, viewer address (or empty)
+  local nd=$1 members=$2 r iid name f
+  r=$(node_region "$nd"); iid=$(instance_id "$nd"); [ -n "$iid" ] || return 0
+  name=$(awk -v c="$(member "$nd")" '$3==c{print $1}' <<<"$ML")
+  [ -n "$name" ] || { warn "$nd: not attached to the gateway yet; skipping its responder"; return 0; }
+  f=$STATE_DIR/mr-$nd.sh
+  {
+    echo 'cat > /usr/local/bin/mesh-responder <<'"'RESP_EOF'"
+    cat "$DEMO_DIR/files/mesh-responder.py"
+    echo RESP_EOF
+    echo 'chmod 755 /usr/local/bin/mesh-responder'
+    echo 'cat > /etc/systemd/system/mesh-responder.service <<UNIT_EOF
 [Unit]
 Description=Global Mesh peer responder
 After=network-online.target
@@ -59,20 +74,20 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF'
-      printf 'echo "aws-%s-0 aws-%s" > /etc/mesh-self\n' "$r" "$r"
-      printf 'cat > /etc/mesh-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
-      [ -n "$2" ] && printf 'echo "http://[%s]:8080/mesh/report %s" > /etc/mesh-push; chmod 600 /etc/mesh-push\n' "$2" "$token"
-      echo 'chmod 644 /etc/mesh-self /etc/mesh-members; systemctl daemon-reload; systemctl enable --now mesh-responder; systemctl restart mesh-responder'
-    } >"$STATE_DIR/mr-$r.sh"
-    ssm_run "$r" "$iid" "$STATE_DIR/mr-$r.sh" 120 >/dev/null && say "$r: responder running" || warn "$r: responder install failed"
-    rm -f "$STATE_DIR/mr-$r.sh"
-  done
+    printf 'echo "%s aws-%s" > /etc/mesh-self\n' "$name" "$r"
+    printf 'cat > /etc/mesh-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
+    [ -n "$3" ] && printf 'echo "http://[%s]:8080/mesh/report %s" > /etc/mesh-push; chmod 600 /etc/mesh-push\n' "$3" "$token"
+    echo 'chmod 644 /etc/mesh-self /etc/mesh-members; systemctl daemon-reload; systemctl enable --now mesh-responder; systemctl restart mesh-responder'
+  } >"$f"
+  ssm_run "$r" "$iid" "$f" 120 >/dev/null && say "$nd ($name): responder running" || warn "$nd: responder install failed"
+  rm -f "$f"
 }
 
 token_file=$STATE_DIR/visual.token
 [ -s "$token_file" ] || { umask 077; head -c 24 /dev/urandom | base64 | tr -d '/+=' >"$token_file"; }
 token=$(cat "$token_file")
-peers=$(member_list | awk '{sub(/-0$/,"",$1); printf "%s%s=%s", (n++?",":""), $1, $2}')
+ML=$(member_list)
+peers=$(awk '{sub(/-[0-9]+$/,"",$1); printf "%s%s=%s", (n++?",":""), $1, $2}' <<<"$ML")
 [ -n "$peers" ] || die "no members have joined $NET yet"
 
 say "installing responders on the EC2 members"

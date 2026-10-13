@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# bin/login REGION [command...]   shell (or one command) on that region's instance, over SSM.
+# bin/login NODE|REGION [command...]   shell (or one command) on that node (a region means its first node), over SSM.
 . "$(dirname "$0")/../lib/common.sh"
 if ! command -v session-manager-plugin >/dev/null; then
   command -v nix-shell >/dev/null || die "session-manager-plugin not found and no nix-shell to fetch it"
   say "session-manager-plugin not found; retrying under nix-shell"
   exec nix-shell -p ssm-session-manager-plugin --run "$(printf '%q ' "$0" "$@")"
 fi
-r=${1:?usage: login REGION [command...]}; shift
+x=${1:?usage: login NODE|REGION [command...]}; shift
 set_fleet
-iid=$(instance_id "$r"); [ -n "$iid" ] || die "no instance in $r"
+nd=$(resolve_node "$x") || exit 1; r=$(node_region "$nd")
+iid=$(instance_id "$nd"); [ -n "$iid" ] || die "no instance for $nd"
 # The operator policy only allows these documents, not SSM-SessionManagerRunShell.
 cmd=${*:-bash -l}
 exec aws ssm start-session --region "$r" --target "$iid" --document-name AWS-StartInteractiveCommand \

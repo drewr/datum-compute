@@ -1,60 +1,106 @@
 #!/usr/bin/env bash
-# Build the Datum Connect test fleet: N EC2 instances (one per AWS region), each joined to one
-# Datum VPC (Network) through one gateway. Idempotent: re-running resumes/repairs.
+# Build the Datum Connect test fleet: N EC2 instances ("nodes", several per region if need be), each
+# joined to one Datum VPC (Network) through one gateway. Idempotent: re-running resumes/repairs.
 #
-#   bin/setup [N]                   N random regions from the pool (default 3); with a fleet already, repairs it
-#   bin/setup --add [N]             add N more random regions (default 3) to the existing fleet
-#   REGIONS="us-east-1 eu-west-2" bin/setup     add these regions to the fleet (N ignored)
-#   bin/setup [--add] [N] --continents eu,na    only pick from these continents: na, sa, eu, ap (asia), me, af
-#                                               (also CONTINENTS=eu,na; ignored when REGIONS is set)
+#   bin/setup [N]                   a fleet of N nodes (default 3), spread over the pool regions; with a
+#                                   fleet already, adds up to N in total
+#   bin/setup --add [N]             add N more nodes (default 3)
+#   REGIONS="eu ap-southeast-1" bin/setup [N]
+#                                   spread over these regions (N defaults to one per region). Each entry
+#                                   (space or comma separated) is an AWS region or a continent alias that
+#                                   means every pool region there: na, sa, eu, ap (asia), me, af
+#   New nodes always go to the region with the fewest nodes, so N may exceed the number of regions.
+#   More than 30 nodes needs FORCE=1 (the gateway routes at most 32 peers). JOBS (default 12) caps parallel work.
 #
 # Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
 # (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
 . "$(dirname "$0")/../lib/common.sh"
 preflight
 
-# ---- 0. pick regions -------------------------------------------------------------------------
-add= conts=${CONTINENTS:-} args=()
+# ---- 0. pick nodes --------------------------------------------------------------------------
+add='' args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --add) add=1 ;;
-    --continents) [ $# -ge 2 ] || die "--continents needs a value, e.g. --continents eu,na"; conts=$2; shift ;;
-    --continents=*) conts=${1#*=} ;;
     *) args+=("$1") ;;
   esac
   shift
 done
 set -- ${args[@]+"${args[@]}"}
-have=$(regions)
+[ $# -le 1 ] || die "usage: bin/setup [--add] [N]   (REGIONS=\"eu ap-southeast-1\" picks regions)"
+n_req=${1:-}
+case $n_req in ''|*[!0-9]*) [ -z "$n_req" ] || die "N must be a number, got '$n_req'" ;; esac
+[ -z "$n_req" ] || [ "$n_req" -ge 1 ] || die "N must be at least 1"
+
+# the regions to spread over: each REGIONS entry is an AWS region or a continent alias (every pool
+# region there); with no REGIONS, the whole pool in random order
+cand=
+explicit=
 if [ -n "${REGIONS:-}" ]; then
-  want=$(tr ' ' '\n' <<<"$REGIONS" | sed '/^$/d')
-elif [ -n "$add" ] || [ -z "$have" ]; then
-  # random pool regions not already in the fleet
-  pool=$POOL
-  if [ -n "$conts" ]; then
+  explicit=1
+  for t in $(tr ',[:upper:]' ' [:lower:]' <<<"$REGIONS"); do
     pat=
-    for c in $(tr ',[:upper:]' ' [:lower:]' <<<"$conts"); do
-      case $c in
-        na|north-america|americas|us|ca) pat="$pat|us-|ca-" ;;
-        sa|south-america) pat="$pat|sa-" ;;
-        eu|europe) pat="$pat|eu-" ;;
-        ap|asia|apac|asia-pacific) pat="$pat|ap-" ;;
-        me|middle-east) pat="$pat|me-|il-" ;;
-        af|africa) pat="$pat|af-" ;;
-        *) die "unknown continent '$c' (use na, sa, eu, ap, me, af)" ;;
-      esac
-    done
-    pool=$(tr ' ' '\n' <<<"$POOL" | grep -E "^(${pat#|})" | tr '\n' ' ')
-    [ -n "$pool" ] || die "no regions in the pool for --continents $conts (POOL: $POOL)"
-  fi
-  # shellcheck disable=SC2086
-  want=$(tr ' ' '\n' <<<$pool | sed '/^$/d' | grep -vxF -f <(echo "$have"; echo) | shuf -n "${1:-3}")
-  [ "$(wc -w <<<"$want")" -ge "${1:-3}" ] || warn "only $(wc -w <<<"$want") region(s) left to pick${conts:+ in $conts}"
+    case $t in
+      na|north-america|americas) pat='us-|ca-' ;;
+      sa|south-america) pat='sa-' ;;
+      eu|europe) pat='eu-' ;;
+      ap|asia|apac|asia-pacific) pat='ap-' ;;
+      me|middle-east) pat='me-|il-' ;;
+      af|africa) pat='af-' ;;
+      *-*-[0-9]*) cand=$(printf '%s\n%s\n' "$cand" "$t") ;;
+      *) die "REGIONS: '$t' is neither a region name (like us-east-1) nor a continent (na, sa, eu, ap, me, af)" ;;
+    esac
+    if [ -n "$pat" ]; then
+      got=$(tr ' ' '\n' <<<"$POOL" | grep -E "^($pat)" || true)
+      [ -n "$got" ] || die "REGIONS: no pool region on '$t' (POOL: $POOL)"
+      cand=$(printf '%s\n%s\n' "$cand" "$got")
+    fi
+  done
 else
-  want=
+  # shellcheck disable=SC2086
+  cand=$(tr ' ' '\n' <<<$POOL | shuf)
 fi
-printf '%s\n%s\n' "$have" "$want" | sed '/^$/d' | awk '!seen[$0]++' >"$regions_file.new" && mv "$regions_file.new" "$regions_file"
-say "regions: $(regions | tr '\n' ' ')"
+cand=$(sed '/^$/d' <<<"$cand" | awk '!s[$0]++')
+
+have=$(nodes)
+declare -A cnt=() nextn=()   # nodes per region; next free index per region
+while read -r nd; do
+  [ -n "$nd" ] || continue
+  r=$(node_region "$nd"); i=$(node_index "$nd")
+  [ "$i" -lt "${nextn[$r]:-0}" ] || nextn[$r]=$((i + 1))
+done <<<"$have"
+for r in $cand; do cnt[$r]=$(grep -c -x -- "$r-[0-9]*" <<<"$have"); done
+
+existing=$(grep -c . <<<"$have")
+if [ -n "$n_req" ]; then
+  if [ -n "$add" ]; then to_add=$n_req; else to_add=$((n_req > existing ? n_req - existing : 0)); fi
+elif [ -n "$explicit" ]; then
+  to_add=0; for r in $cand; do [ "${cnt[$r]}" -gt 0 ] || to_add=$((to_add + 1)); done   # one per region that has none
+elif [ -z "$have" ]; then
+  to_add=3
+else
+  to_add=0                                                                             # plain re-run: repair only
+fi
+total=$((existing + to_add))
+if [ "$total" -gt 30 ] && [ -z "${FORCE:-}" ]; then
+  die "$total nodes is more than the gateway's peer routes allow (32 in all, counting the viewer); set FORCE=1 to try anyway"
+fi
+new=()
+for _ in $(seq "$to_add"); do
+  best=
+  for r in $cand; do [ -n "$best" ] && [ "${cnt[$r]}" -ge "${cnt[$best]}" ] && continue; best=$r; done
+  new+=("$best-${nextn[$best]:-0}")
+  cnt[$best]=$((cnt[$best] + 1)); nextn[$best]=$((${nextn[$best]:-0} + 1))
+done
+for r in $cand; do
+  [ "${cnt[$r]}" -le 8 ] || warn "$r would have ${cnt[$r]} nodes; $INSTANCE_TYPE has 2 vCPUs each and a new account's per-region vCPU quota may be lower"
+done
+# the longest name we derive from a node is <member>-editor (PolicyBinding); keep it a valid 63-char name
+for nd in ${new[@]+"${new[@]}"}; do
+  [ "$(( ${#FLEET} + 1 + ${#nd} + 7 ))" -le 63 ] || die "fleet name $FLEET is too long for node names like $nd; set a shorter FLEET_PREFIX or FLEET"
+done
+{ printf '%s\n' "$have"; printf '%s\n' ${new[@]+"${new[@]}"}; } | sed '/^$/d' | awk '!seen[$0]++' >"$nodes_file.new" && mv "$nodes_file.new" "$nodes_file"
+say "nodes: $(nodes | wc -l) in $(regions | wc -l) regions; new: ${new[*]:-none}"
 
 # ---- 1. Datum: network + gateway -------------------------------------------------------------
 if ! dc get networks "$NET" >/dev/null 2>&1; then
@@ -98,9 +144,9 @@ if ! aws iam get-policy --policy-arn "$BARN" >/dev/null 2>&1; then
   aws iam create-policy --policy-name "$BOUNDARY" --policy-document "$(tmpl "$DEMO_DIR/iam/boundary.json" ACCOUNT="$ACCOUNT" FLEET_PREFIX="$FLEET_PREFIX")" >/dev/null
 fi
 
-# ---- 3. per region: Datum identity + AWS instance --------------------------------------------
-sa_for() { # region: ServiceAccount, key -> SSM, PolicyBinding
-  local r=$1 n; n=$(member "$r")
+# ---- 3. per node: Datum identity + AWS instance --------------------------------------------
+sa_for() { # node: ServiceAccount, key -> SSM, PolicyBinding
+  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
   dc get serviceaccounts "$n" >/dev/null 2>&1 || dc create --validate=false -f - >/dev/null <<Y
 apiVersion: iam.miloapis.com/v1alpha1
 kind: ServiceAccount
@@ -114,11 +160,11 @@ Y
     [ -n "$uid" ] && [ -n "$email" ] && break; sleep 2
   done
   [ -n "$uid" ] && [ -n "$email" ] || die "service account $n never became ready"
-  if ! aws ssm get-parameter --region "$r" --name "$(key_param "$r")" >/dev/null 2>&1; then
+  if ! aws ssm get-parameter --region "$r" --name "$(key_param "$nd")" >/dev/null 2>&1; then
     # The private key is only ever returned once; it goes straight into SSM and is never printed.
     dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1 || true
     dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey \
-      | aws ssm put-parameter --region "$r" --name "$(key_param "$r")" --type SecureString \
+      | aws ssm put-parameter --region "$r" --name "$(key_param "$nd")" --type SecureString \
           --value file:///dev/stdin --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
 apiVersion: identity.miloapis.com/v1alpha1
 kind: ServiceAccountKey
@@ -138,19 +184,19 @@ spec:
 Y
 }
 
-aws_for() { # region: role, profile, SG, instance (launches across default subnets until one works)
-  local r=$1 n; n=$(member "$r")
+aws_for() { # node: role, profile, SG, instance (launches across default subnets until one works)
+  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
   aws iam get-role --role-name "$n" >/dev/null 2>&1 || {
     aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
       --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
   }
   aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
-    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$r")")"
+    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$nd")")"
   aws iam get-instance-profile --instance-profile-name "$n" >/dev/null 2>&1 || {
     aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
     aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n"
   }
-  [ -n "$(instance_id "$r")" ] && { instance_id "$r"; return 0; }
+  [ -n "$(instance_id "$nd")" ] && { instance_id "$nd"; return 0; }
   local vpc sg ami sub out
   vpc=$(aws ec2 describe-vpcs --region "$r" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
   [ "$vpc" != None ] || { warn "$r has no default VPC"; return 1; }
@@ -173,46 +219,45 @@ aws_for() { # region: role, profile, SG, instance (launches across default subne
   return 1
 }
 
-onbox() { # region iid: install, patch, enrol, join
-  local r=$1 iid=$2 f; f=$STATE_DIR/onbox-$r.sh
+onbox() { # node iid: install, patch, enrol, join
+  local nd=$1 iid=$2 r f; r=$(node_region "$nd"); f=$STATE_DIR/onbox-$nd.sh
   {
     printf 'REGION=%q CONNECTOR=%q KEYPARAM=%q NET=%q PROJECT=%q API_ENDPOINT=%q TOKEN_URI=%q GW_LOCATION=%q\n' \
-      "$r" "$(member "$r")" "$(key_param "$r")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
+      "$r" "$(member "$nd")" "$(key_param "$nd")" "$NET" "$PROJECT" "$API_ENDPOINT" "$TOKEN_URI" "$GW_LOCATION"
     cat "$DEMO_DIR/files/install.sh" "$DEMO_DIR/files/patch-edge.sh" "$DEMO_DIR/files/tune-net.sh" "$DEMO_DIR/files/bootstrap.sh"
   } >"$f"
   ssm_run "$r" "$iid" "$f" 1500
   local rc=$?; rm -f "$f"; return $rc
 }
 
-one_region() {
-  local r=$1 iid
-  sa_for "$r" || return 1
-  iid=$(aws_for "$r") || return 1
-  say "$r: instance $iid; installing and joining"
-  onbox "$r" "$iid"
+one_node() {
+  local nd=$1 iid
+  sa_for "$nd" || return 1
+  iid=$(aws_for "$nd") || return 1
+  say "$nd: instance $iid; installing and joining"
+  onbox "$nd" "$iid"
 }
 
-pids=()
-for r in $(regions); do
-  say "$r: starting"
-  ( one_region "$r" >"$STATE_DIR/logs/$r.log" 2>&1; echo $? >"$STATE_DIR/logs/$r.rc" ) &
-  pids+=($!)
+for nd in $(nodes); do
+  throttle
+  say "$nd: starting"
+  ( one_node "$nd" >"$STATE_DIR/logs/$nd.log" 2>&1; echo $? >"$STATE_DIR/logs/$nd.rc" ) &
 done
-wait "${pids[@]}"
+wait
 fail=0
-for r in $(regions); do
-  rc=$(cat "$STATE_DIR/logs/$r.rc" 2>/dev/null || echo 1)
-  if [ "$rc" = 0 ]; then say "$r: ok"; else warn "$r: FAILED (see $STATE_DIR/logs/$r.log)"; fail=1; fi
+for nd in $(nodes); do
+  rc=$(cat "$STATE_DIR/logs/$nd.rc" 2>/dev/null || echo 1)
+  if [ "$rc" = 0 ]; then say "$nd: ok"; else warn "$nd: FAILED (see $STATE_DIR/logs/$nd.log)"; fail=1; fi
 done
 
 # ---- 4. netcheck + member list on every instance ---------------------------------------------
 say "installing netcheck"
-members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --arg fleet "$FLEET" --argjson names "$(regions | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
+members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --argjson names "$(nodes | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
   '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
    | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"')
 [ -n "$members" ] || warn "no network bindings found yet; re-run bin/setup once the joins settle"
-for r in $(regions); do
-  iid=$(instance_id "$r"); [ -n "$iid" ] || continue
+for nd in $(nodes); do
+  iid=$(instance_id "$nd"); [ -n "$iid" ] || continue
   {
     echo 'cat > /usr/local/bin/netcheck <<'"'NETCHECK_EOF'"
     cat "$DEMO_DIR/files/netcheck"
@@ -220,14 +265,16 @@ for r in $(regions); do
     echo 'chmod 755 /usr/local/bin/netcheck'
     printf 'printf "%%s\\n" %q %q > /etc/netcheck.conf\n' "PROJECT=$PROJECT" "FLEET=$FLEET"
     printf 'cat > /etc/netcheck-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
-  } >"$STATE_DIR/nc-$r.sh"
-  ssm_run "$r" "$iid" "$STATE_DIR/nc-$r.sh" 120 >/dev/null || warn "$r: netcheck install failed"
-  rm -f "$STATE_DIR/nc-$r.sh"
+  } >"$STATE_DIR/nc-$nd.sh"
+  throttle
+  ( ssm_run "$(node_region "$nd")" "$iid" "$STATE_DIR/nc-$nd.sh" 120 >/dev/null || warn "$nd: netcheck install failed"
+    rm -f "$STATE_DIR/nc-$nd.sh" ) &
 done
+wait
 
 say "members of $NET via $GW:"; echo "$members" | sed 's/^/    /'
-say "run netcheck on a random instance: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/netcheck [region]"
-say "or open a shell: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login <region>   (regions: $(regions | tr '\n' ' '))"
+say "run netcheck on a random instance: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/netcheck [node|region]"
+say "or open a shell: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login <node|region>   (nodes: $(nodes | tr '\n' ' '))"
 if [ "${VISUAL:-1}" != 0 ] && [ "$fail" = 0 ]; then
   if [ -s "$DEMO_DIR/visual/IMAGE" ]; then "$DEMO_DIR/bin/visual" || warn "visual netcheck failed; re-run bin/visual"
   else warn "no visual/IMAGE; run visual/build.sh then bin/visual for the visual netcheck"; fi

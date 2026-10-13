@@ -2,18 +2,28 @@
 # Remove everything bin/setup created for this fleet (FLEET_PREFIX + AWS user name, see lib/common.sh): instances, SGs, roles, profiles, SSM keys, Datum service
 # accounts/keys/bindings/connectors, the gateway and the network.
 #
-#   bin/teardown               regions from state/regions.txt (or REGIONS="...")
+#   bin/teardown               the nodes in state/<fleet>/nodes.txt
+#   REGIONS="a b" bin/teardown  with no state: find this fleet's instances in those regions
+#   NODES="us-east-1-0 ..." bin/teardown   exactly these nodes
 #   bin/teardown --purge       also delete the shared permissions boundary policy
 #   KEEP_NET=1 bin/teardown    remove the fleet only; keep the network, gateway and viewer
 . "$(dirname "$0")/../lib/common.sh"
 preflight
 PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
-[ -n "${REGIONS:-}" ] && tr ' ' '\n' <<<"$REGIONS" >"$regions_file"
-[ -s "$regions_file" ] || die "no regions known (no $regions_file); set REGIONS=\"...\""
+if [ -n "${NODES:-}" ]; then
+  tr ' ' '\n' <<<"$NODES" >"$nodes_file"
+elif [ -n "${REGIONS:-}" ] && [ ! -s "$nodes_file" ]; then
+  for r in $REGIONS; do
+    aws ec2 describe-instances --region "$r" --filters "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" \
+      Name=instance-state-name,Values=pending,running,stopping,stopped \
+      --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value' --output text | tr '\t' '\n' | sed "s/^$FLEET-//" | grep -E -- '-[0-9]+$'
+  done >"$nodes_file"
+fi
+[ -s "$nodes_file" ] || die "no nodes known (no $nodes_file); set NODES=\"us-east-1-0 ...\" or REGIONS=\"...\""
 GW=connect-$NET-$GW_LOCATION
 
 aws_down() {
-  local r=$1 n; n=$(member "$r")
+  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
   local ids; ids=$(aws ec2 describe-instances --region "$r" --filters "Name=tag:Name,Values=$n" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" \
     Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
   if [ -n "$ids" ]; then
@@ -26,26 +36,27 @@ aws_down() {
   [ "$sg" != None ] && for _ in 1 2 3 4 5 6; do aws ec2 delete-security-group --region "$r" --group-id "$sg" 2>/dev/null && break; sleep 10; done
   local owner; owner=$(aws iam get-role --role-name "$n" --query 'Role.Tags[?Key==`fleet`].Value | [0]' --output text 2>/dev/null)
   if [ -n "$owner" ] && [ "$owner" != "$FLEET" ]; then
-    echo "$r: role $n belongs to fleet ${owner/None/(none)}, not $FLEET; leaving the role, profile and key"
+    echo "$nd: role $n belongs to fleet ${owner/None/(none)}, not $FLEET; leaving the role, profile and key"
     return 0
   fi
   aws iam remove-role-from-instance-profile --instance-profile-name "$n" --role-name "$n" 2>/dev/null
   aws iam delete-instance-profile --instance-profile-name "$n" 2>/dev/null
   aws iam delete-role-policy --role-name "$n" --policy-name own-key-and-ssm 2>/dev/null
   aws iam delete-role --role-name "$n" 2>/dev/null
-  aws ssm delete-parameter --region "$r" --name "$(key_param "$r")" 2>/dev/null
+  aws ssm delete-parameter --region "$r" --name "$(key_param "$nd")" 2>/dev/null
   return 0
 }
 
-pids=()
-for r in $(regions); do
-  say "$r: AWS teardown"
-  ( aws_down "$r" >"$STATE_DIR/logs/down-$r.log" 2>&1 ) & pids+=($!)
+for nd in $(nodes); do
+  throttle
+  say "$nd: AWS teardown"
+  ( aws_down "$nd" >"$STATE_DIR/logs/down-$nd.log" 2>&1 ) &
 done
 
-for r in $(regions); do
-  n=$(member "$r"); say "$r: Datum teardown"
-  for b in $(dc get connectnetworkbindings -o json | jq -r --arg c "$n" '.items[]|select(.spec.connectorRef==$c)|.metadata.name'); do
+bindings=$(dc get connectnetworkbindings -o json)
+for nd in $(nodes); do
+  n=$(member "$nd"); say "$nd: Datum teardown"
+  for b in $(jq -r --arg c "$n" '.items[]|select(.spec.connectorRef==$c)|.metadata.name' <<<"$bindings"); do
     dc delete connectnetworkbindings "$b" >/dev/null 2>&1
   done
   dc delete connectors "$n" >/dev/null 2>&1
@@ -61,9 +72,9 @@ if [ -z "${KEEP_NET:-}" ]; then
 fi
 warn "check for leftover ConnectGateway quota claims (README, 'Quota'); they need a staff identity to delete"
 
-wait "${pids[@]}"
+wait
 if [ "$PURGE" = 1 ]; then
   aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT:policy/$BOUNDARY" 2>&1 | tail -1
 fi
-if [ -n "${KEEP_NET:-}" ]; then rm -f "$regions_file"; else rm -rf "$STATE_DIR"; fi
+if [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else rm -rf "$STATE_DIR"; fi
 say "done"

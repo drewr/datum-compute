@@ -5,13 +5,14 @@ then measures how far apart they are from each other and from Datum's relays. It
 staging. Everything here is scripted, so you can build it, look at it and tear it down:
 
 ```
-bin/setup [N]            N random regions from the pool (default 3); re-run to repair
-bin/setup --add [N]     add N more random regions to the fleet; REGIONS="a b" adds those
-bin/setup ... --continents eu,na   pick only from these continents (na, sa, eu, ap, me, af)
-bin/status               instances, SSM state, the gateway, each member's address
-bin/netcheck [REGION]    netcheck on one instance (random if no region)
+bin/setup [N]            a fleet of N nodes (default 3), several per region if N exceeds the regions; re-run to repair
+bin/setup --add [N]     add N more nodes (default 3)
+REGIONS="eu ap-southeast-1" bin/setup 10   spread 10 nodes over these regions (space or comma separated); an entry is an
+                        AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there
+bin/status               nodes, SSM state, the gateway, each member's address
+bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a region means its first node)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
-bin/login REGION [cmd]   shell (or one command) on that region's instance, e.g. bin/login eu-west-2 netcheck
+bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
 bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
 bin/teardown [--purge]   delete everything setup created (KEEP_NET=1 keeps the network, gateway and viewer)
 ```
@@ -22,7 +23,7 @@ The AWS account comes from `aws sts get-caller-identity` and the Datum org and p
 
 **Fleet name.** Every resource, AWS and Datum, is named after the fleet: `FLEET_PREFIX` (default
 `drewr-`) plus the AWS user name, lowercased, such as `drewr-demo261009`. Members are
-`<fleet>-<region>`, the network is `<fleet>-net` and state lives in `state/<fleet>/`, so fleets of
+nodes named `<fleet>-<region>-<n>` (`n` counts from 0 within a region, e.g. `drewr-demo261009-eu-west-2-1`), the network is `<fleet>-net` and state lives in `state/<fleet>/`, so fleets of
 different users can run side by side in one account and Datum project. The Datum gateway quota (3 on
 staging) and `bin/teardown --purge` (it deletes the account's shared boundary policy) are the limits.
 Set `FLEET` to override the name. The operator policy grants only names that start with
@@ -60,18 +61,18 @@ Staging has only two Datum locations, `us-central-1` and `us-east-1`; the gatewa
 
 Each instance gets its own service account so it can be attributed and revoked on its own:
 
-- a `ServiceAccount` `<fleet>-<region>`;
+- a `ServiceAccount` `<fleet>-<region>-<n>`;
 - a `ServiceAccountKey`, whose private key is returned once and piped straight into AWS SSM
-  Parameter Store as a SecureString at `/<fleet>/<region>/key`. It is never printed or
+  Parameter Store as a SecureString at `/<fleet>/<region>/<n>/key`. It is never printed or
   written to disk, and never put in user-data;
 - a `PolicyBinding` to the `editor` role on the project. `editor` is the only assignable role
   that inherits connect admin on staging, so it is broader than we would like (see the end).
 
 ## 4. The AWS side
 
-Per region, in the default VPC:
+Per node, in its region's default VPC:
 
-- an IAM role and instance profile `<fleet>-<region>` under the permissions boundary
+- an IAM role and instance profile `<fleet>-<region>-<n>` under the permissions boundary
   `<prefix>boundary`. The role can read only its own key parameter (and decrypt via SSM)
   and talk to Systems Manager. It cannot do anything else;
 - a security group with **no inbound rules**;
@@ -110,7 +111,7 @@ It needs IAM write access, so use an admin identity; it refuses to run as the op
 3. `files/bootstrap.sh`: fetches the instance's key from SSM and builds a credentials file by adding
    `project_id`, `api_endpoint` and `token_uri`; installs the network helper with the exact default
    managed policy (a narrowed one is rejected); runs the daemon as the non-root user `datum`
-   under a user systemd service with lingering; enrols with `connect up --name <fleet>-<region>`
+   under a user systemd service with lingering; enrols with `connect up --name <fleet>-<region>-<n>`
    (names must be unique, hostnames collide); runs `connect join <fleet>-net`; and finally
    deletes the key and credentials.
 
@@ -131,10 +132,10 @@ This is a test-fleet hack, not something to do in production.
 After the joins, setup installs `/usr/local/bin/netcheck` and a list of members on every instance:
 
 ```
-$ bin/login eu-west-2 netcheck
+$ bin/login eu-west-2-0 netcheck
 Report:
     * This machine's region: eu-west-2
-    * Connector: <fleet>-eu-west-2
+    * Connector: <fleet>-eu-west-2-0
     * IPv4: ...            * IPv6: no
     * Edge-reported location: ...
     * VPC: <fleet>-net   address: fd20:...
@@ -187,6 +188,7 @@ shared permissions boundary policy. The original network and gateway in the proj
   them needs a staff identity (`datumctl auth switch <staff user>`, then `--project <project>`).
 - **Broad binding.** The service accounts hold `editor`. Push for a narrow connect role before any
   use outside staging. Teardown removes the bindings.
+- **Many nodes.** `bin/setup 100` with `REGIONS=na` puts nodes in the region with the fewest first, so they spread evenly. The gateway routes at most 32 peers (the nodes plus the viewer), so more than 30 nodes needs `FORCE=1` and the extra peers will not be reachable. Each `t4g.micro` uses 2 vCPUs and a new AWS account's per-region vCPU quota may be as low as 5, so large counts per region may fail at launch; setup then stops for that node and a re-run retries. `JOBS` (default 12) limits parallel work.
 - **Public IPv4.** Instances use the default VPC with a public IPv4 address for outbound internet
   only; nothing can connect in. An IPv6-only variant needs IPv6 VPCs, an egress-only internet
   gateway and an S3 mirror for the binaries (GitHub and the `ec2messages` endpoint have no IPv6).
@@ -204,8 +206,8 @@ lib/        common.sh (account/org/project discovery, SSM runner)
 files/      on-instance: install.sh, patch-edge.sh, bootstrap.sh, netcheck, mesh-responder.py
 visual/     the viewer (Go + React) and build.sh
 iam/        boundary, instance policy, trust, operator policy (templates: __ACCOUNT__, __REGION__)
-state/      git-ignored: chosen regions and logs (logs/<region>.log has each instance's output)
+state/      git-ignored: nodes.txt and logs (logs/<node>.log has each instance's output)
 ```
 
-Environment overrides: `NET`, `GW_LOCATION`, `INSTANCE_TYPE`, `POOL`, `REGIONS`, `ORG`, `PROJECT`,
+Environment overrides: `NET`, `GW_LOCATION`, `INSTANCE_TYPE`, `POOL`, `REGIONS`, `JOBS`, `FORCE`, `ORG`, `PROJECT`,
 `API_ENDPOINT`, `TOKEN_URI`, `DATUMCTL_VERSION`, `CONNECT_VERSION`, `COMPUTE_VERSION`.

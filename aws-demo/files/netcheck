@@ -16,7 +16,7 @@ edge=$(curl -s -m3 https://edge.datum.net/ | sed -n 's/^region=//p')
 tok=$(curl -s -m2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
 region=$(curl -s -m2 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/placement/region)
 ms() { awk -v v="$1" 'BEGIN{ if (v=="") print ""; else printf "%.1fms", v*1000 }'; }
-city() { case $1 in
+city() { set -- "${1%-[0-9]*}"; case $1 in
   us-east-1) echo Ashburn;; us-east-2) echo Columbus;; us-west-1) echo "San Francisco";; us-west-2) echo Portland;;
   us-central-1) echo Dallas;; ca-central-1) echo Montreal;; ca-west-1) echo Calgary;; sa-east-1) echo "Sao Paulo";;
   eu-west-1) echo Dublin;; eu-west-2) echo London;; eu-west-3) echo Paris;; eu-central-1) echo Frankfurt;;
