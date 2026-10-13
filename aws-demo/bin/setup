@@ -122,8 +122,7 @@ done
 GW=connect-$NET-$GW_LOCATION
 if ! dc get connectgateways "$GW" >/dev/null 2>&1; then
   say "creating ConnectGateway $GW (routes $PREFIX)"
-  # NOTE: the ConnectGateway quota is small (3 on staging). If this is denied with 403, see README.
-  dc create --validate=false -f - <<Y
+  gwerr=$(dc create --validate=false -f - 2>&1 <<Y
 apiVersion: connect.datumapis.com/v1alpha1
 kind: ConnectGateway
 metadata: {name: $GW, namespace: default}
@@ -137,6 +136,17 @@ spec:
   - https://iroh-relay.us-east-1.datum-staging.net
   routes: ["$PREFIX"]
 Y
+  ) || {
+    printf '%s\n' "$gwerr" >&2
+    case $gwerr in
+      *quota*|*Forbidden*)
+        warn "the ConnectGateway quota (3 on staging) is used up. Gateways in this project:"
+        dc get connectgateways -o json 2>/dev/null | jq -r '.items[] | "    \(.metadata.name)  network=\(.spec.networkRef)  \(.status.phase // "?")  created \(.metadata.creationTimestamp)"' >&2
+        warn "a Dormant gateway has no running workload but still counts. Delete one that is not in use: datumctl delete connectgateway <name>"
+        warn "(an owner's fleet is removed with its own bin/teardown)" ;;
+    esac
+    die "cannot create ConnectGateway $GW"
+  }
 fi
 
 # ---- 2. AWS: permissions boundary (shared) ---------------------------------------------------

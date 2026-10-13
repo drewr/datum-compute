@@ -67,7 +67,10 @@ done
 if [ -z "${KEEP_NET:-}" ]; then
   "$(dirname "$0")/visual" --delete
   say "deleting gateway $GW and network $NET"
-  dc delete connectgateways "$GW" >/dev/null 2>&1
+  # also any other gateway on this network, such as one a join created with a hash suffix
+  for g in $(dc get connectgateways -o json 2>/dev/null | jq -r --arg net "$NET" '.items[] | select(.spec.networkRef==$net) | .metadata.name') "$GW"; do
+    dc delete connectgateways "$g" >/dev/null 2>&1
+  done
   dc delete networks "$NET" >/dev/null 2>&1
 fi
 warn "check for leftover ConnectGateway quota claims (README, 'Quota'); they need a staff identity to delete"
