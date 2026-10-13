@@ -8,7 +8,7 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 bin/setup [N]            a fleet of N nodes (default 3), several per region if N exceeds the regions; re-run to repair
 bin/setup --add [N]     add N more nodes (default 3)
 REGIONS="eu ap-southeast-1" bin/setup 10   spread 10 nodes over these regions (space or comma separated); an entry is an
-                        AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there
+                        AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there (the default pool is 17 regions; set `POOL` to change it)
 bin/status               nodes, SSM state, the gateway, each member's address
 bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a region means its first node)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
