@@ -4,13 +4,21 @@
 #
 #   bin/teardown               the nodes in state/<fleet>/nodes.txt
 #   REGIONS="a b" bin/teardown  with no state: find this fleet's instances in those regions
-#   NODES="us-east-1-0 ..." bin/teardown   exactly these nodes; the rest of the fleet, the network and the gateway stay
+#   bin/teardown us-east-1-0 ...   exactly these nodes; the rest of the fleet, the network and the gateway stay
 #   bin/teardown --purge       also delete the shared permissions boundary policy
 #   KEEP_NET=1 bin/teardown    remove the fleet only; keep the network, gateway and viewer
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
-if [ -n "${NODES:-}" ]; then
+PURGE=0 NODES=
+for a in "$@"; do
+  case $a in
+    --purge) PURGE=1 ;;
+    -*) die "usage: bin/teardown [--purge] [NODE...]" ;;
+    *-[0-9]*-[0-9]*) NODES="$NODES $a" ;;
+    *) die "'$a' is not a node name like us-east-1-0 (usage: bin/teardown [--purge] [NODE...])" ;;
+  esac
+done
+if [ -n "$NODES" ]; then
   # work on a partial list so the fleet's own nodes.txt keeps its other nodes; the network stays
   real_nodes=$nodes_file; nodes_file=$STATE_DIR/nodes.partial
   tr ' ' '\n' <<<"$NODES" | sed '/^$/d' >"$nodes_file"
@@ -23,7 +31,7 @@ elif [ ! -s "$nodes_file" ]; then
       --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value' --output text 2>/dev/null | tr '\t' '\n' | sed "s/^$FLEET-//" | grep -E -- '-[0-9]+$'
   done >"$nodes_file"
 fi
-[ -s "$nodes_file" ] || warn "no nodes found for $FLEET (no $nodes_file and no tagged instances); removing only the Datum network and gateways. Set NODES=\"us-east-1-0 ...\" or REGIONS=\"...\" to look elsewhere"
+[ -s "$nodes_file" ] || warn "no nodes found for $FLEET (no $nodes_file and no tagged instances); removing only the Datum network and gateways. Name nodes (bin/teardown us-east-1-0 ...) or set REGIONS=\"...\" to look elsewhere"
 GW=connect-$NET-$GW_LOCATION
 
 for nd in $(nodes); do
