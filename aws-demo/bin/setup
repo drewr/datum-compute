@@ -82,6 +82,20 @@ done
 for r in $cand; do
   [ "${cnt[$r]}" -le 8 ] || warn "$r would have ${cnt[$r]} nodes; $INSTANCE_TYPE has 2 vCPUs each and a new account's per-region vCPU quota may be lower"
 done
+# Skip new nodes in regions the operator policy denies (the deployed policy can lag iam/operator.json), so
+# no Datum objects or state are left behind for a node that cannot be built.
+denied=() ok_new=()
+for r in $(printf '%s\n' ${new[@]+"${new[@]}"} | sed 's/-[0-9]*$//' | awk 'NF && !s[$0]++'); do
+  out=$(aws ec2 describe-instances --region "$r" --max-results 5 --query 'length(Reservations)' --output text 2>&1) ||
+    case $out in *UnauthorizedOperation*|*AccessDenied*|*"explicit deny"*) denied+=("$r") ;; esac
+done
+if [ ${#denied[@]} -gt 0 ]; then
+  for nd in ${new[@]+"${new[@]}"}; do
+    [[ " ${denied[*]} " == *" $(node_region "$nd") "* ]] || ok_new+=("$nd")
+  done
+  new=(${ok_new[@]+"${ok_new[@]}"})
+  warn "skipping ${denied[*]}: the operator policy in this account denies those regions. An admin must run AWS_PROFILE=<admin> bin/bootstrap-iam to apply iam/operator.json"
+fi
 # the longest name we derive from a node is <member>-editor (PolicyBinding); keep it a valid 63-char name
 for nd in ${new[@]+"${new[@]}"}; do
   [ "$(( ${#FLEET} + 1 + ${#nd} + 7 ))" -le 63 ] || die "fleet name $FLEET is too long for node names like $nd; set a shorter FLEET_PREFIX or FLEET"
@@ -324,7 +338,7 @@ members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --argjson
    | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"')
 [ -n "$members" ] || warn "no network bindings found yet; re-run bin/setup once the joins settle"
 for nd in $(nodes); do
-  iid=$(instance_id "$nd"); [ -n "$iid" ] || continue
+  iid=$(instance_id "$nd" 2>/dev/null); [ -n "$iid" ] || { warn "$nd: no instance; netcheck not installed there"; continue; }
   {
     echo 'cat > /usr/local/bin/netcheck <<'"'NETCHECK_EOF'"
     cat "$DEMO_DIR/files/netcheck"
