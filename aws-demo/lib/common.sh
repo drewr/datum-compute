@@ -10,7 +10,7 @@ INSTANCE_TYPE=${INSTANCE_TYPE:-t4g.micro}
 TAG=datum-connect-test                         # project tag value on every AWS resource we create
 FLEET_PREFIX=${FLEET_PREFIX:-drewr-}           # FLEET = this + the AWS user's name (see set_fleet); names everything
 BOUNDARY=${FLEET_PREFIX}boundary                # permissions boundary for instance roles (one per account)
-POOL=${POOL:-"us-east-1 us-east-2 us-west-1 us-west-2 ca-central-1 eu-central-1 eu-west-2 eu-west-3 eu-north-1 ap-northeast-1 ap-southeast-1"}
+POOL=${POOL:-"us-east-1 us-east-2 us-west-1 us-west-2 ca-central-1 sa-east-1 eu-west-1 eu-west-2 eu-west-3 eu-central-1 eu-north-1 ap-south-1 ap-northeast-1 ap-northeast-2 ap-northeast-3 ap-southeast-1 ap-southeast-2"}
 API_ENDPOINT=${API_ENDPOINT:-https://api.staging.env.datum.net}
 TOKEN_URI=${TOKEN_URI:-https://auth.staging.env.datum.net/oauth/v2/token}
 
