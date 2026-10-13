@@ -2,7 +2,7 @@
 # bin/status: fleet overview from AWS and Datum.
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-GW=connect-$NET-$GW_LOCATION
+GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
 printf '%-20s %-20s %-10s %s\n' NODE INSTANCE STATE SSM
 for nd in $(nodes); do
   r=$(node_region "$nd"); iid=$(instance_id "$nd")

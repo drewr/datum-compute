@@ -96,6 +96,13 @@ expand_regions() {
   sed '/^$/d' <<<"$out" | awk '!s[$0]++'
 }
 
+# gateway_for_net -> name of the gateway already serving $NET at $GW_LOCATION (the conventional
+# name first, else any, such as a join's hash-suffixed one); empty if none
+gateway_for_net() {
+  dc get connectgateways -o json 2>/dev/null | jq -r --arg n "$NET" --arg l "$GW_LOCATION" --arg want "connect-$NET-$GW_LOCATION" \
+    '[.items[] | select(.spec.networkRef==$n and .spec.locationRef==$l) | .metadata.name] | (map(select(.==$want)) + .)[0] // empty'
+}
+
 # throttle: wait until fewer than ${JOBS:-12} background jobs are running
 throttle() { while [ "$(jobs -rp | wc -l)" -ge "${JOBS:-12}" ]; do wait -n; done; }
 

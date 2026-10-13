@@ -21,7 +21,7 @@ fi
 IMAGE=${IMAGE:-$(cat "$DEMO_DIR/visual/IMAGE" 2>/dev/null)}
 [ -n "$IMAGE" ] || die "no image: run visual/build.sh (or set IMAGE=)"
 [ -n "$(nodes)" ] || die "no fleet yet: run bin/setup first"
-GW=connect-$NET-$GW_LOCATION
+GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
 
 # "name address connector" lines for the EC2 members. The viewer names a peer <location>-<its position
 # among that location's peers>, so we list sorted by region then node index and name them to match.
