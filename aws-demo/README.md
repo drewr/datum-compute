@@ -7,6 +7,7 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 ```
 bin/setup [N]            N random regions from the pool (default 3); re-run to repair
 bin/setup --add [N]     add N more random regions to the fleet; REGIONS="a b" adds those
+bin/setup ... --continents eu,na   pick only from these continents (na, sa, eu, ap, me, af)
 bin/status               instances, SSM state, the gateway, each member's address
 bin/netcheck [REGION]    netcheck on one instance (random if no region)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL

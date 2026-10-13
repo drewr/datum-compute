@@ -5,6 +5,8 @@
 #   bin/setup [N]                   N random regions from the pool (default 3); with a fleet already, repairs it
 #   bin/setup --add [N]             add N more random regions (default 3) to the existing fleet
 #   REGIONS="us-east-1 eu-west-2" bin/setup     add these regions to the fleet (N ignored)
+#   bin/setup [--add] [N] --continents eu,na    only pick from these continents: na, sa, eu, ap (asia), me, af
+#                                               (also CONTINENTS=eu,na; ignored when REGIONS is set)
 #
 # Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
 # (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
@@ -12,15 +14,42 @@
 preflight
 
 # ---- 0. pick regions -------------------------------------------------------------------------
-add=
-[ "${1:-}" = --add ] && { add=1; shift; }
+add= conts=${CONTINENTS:-} args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --add) add=1 ;;
+    --continents) [ $# -ge 2 ] || die "--continents needs a value, e.g. --continents eu,na"; conts=$2; shift ;;
+    --continents=*) conts=${1#*=} ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+set -- ${args[@]+"${args[@]}"}
 have=$(regions)
 if [ -n "${REGIONS:-}" ]; then
   want=$(tr ' ' '\n' <<<"$REGIONS" | sed '/^$/d')
 elif [ -n "$add" ] || [ -z "$have" ]; then
   # random pool regions not already in the fleet
+  pool=$POOL
+  if [ -n "$conts" ]; then
+    pat=
+    for c in $(tr ',[:upper:]' ' [:lower:]' <<<"$conts"); do
+      case $c in
+        na|north-america|americas|us|ca) pat="$pat|us-|ca-" ;;
+        sa|south-america) pat="$pat|sa-" ;;
+        eu|europe) pat="$pat|eu-" ;;
+        ap|asia|apac|asia-pacific) pat="$pat|ap-" ;;
+        me|middle-east) pat="$pat|me-|il-" ;;
+        af|africa) pat="$pat|af-" ;;
+        *) die "unknown continent '$c' (use na, sa, eu, ap, me, af)" ;;
+      esac
+    done
+    pool=$(tr ' ' '\n' <<<"$POOL" | grep -E "^(${pat#|})" | tr '\n' ' ')
+    [ -n "$pool" ] || die "no regions in the pool for --continents $conts (POOL: $POOL)"
+  fi
   # shellcheck disable=SC2086
-  want=$(tr ' ' '\n' <<<$POOL | grep -vxF -f <(echo "$have"; echo) | shuf -n "${1:-3}")
+  want=$(tr ' ' '\n' <<<$pool | sed '/^$/d' | grep -vxF -f <(echo "$have"; echo) | shuf -n "${1:-3}")
+  [ "$(wc -w <<<"$want")" -ge "${1:-3}" ] || warn "only $(wc -w <<<"$want") region(s) left to pick${conts:+ in $conts}"
 else
   want=
 fi
