@@ -86,7 +86,7 @@ export function StatsPanel({
 
   const tiles = [
     { label: 'Regions live', value: totals?.regions ?? 0 },
-    { label: 'Instances', value: totals?.instances ?? 0, tour: 'instances' as const },
+    { label: 'Instances', value: totals?.instances ?? 0 },
     {
       label: 'Average latency',
       value:
@@ -110,7 +110,7 @@ export function StatsPanel({
   const gap = compact ? 'gap-2.5' : 'gap-4';
 
   const activityCard = (
-    <Card className={`${panelCard} ${fill ? 'min-h-0 flex-1' : ''}`} data-tour="activity">
+    <Card className={`${panelCard} ${fill ? 'min-h-0 flex-1' : ''}`}>
       <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''} ${pad}`}>
         <ActivityPanel
           activity={view?.activity ?? []}
@@ -177,7 +177,7 @@ export function StatsPanel({
               sent between Instances, privately
             </p>
           </div>
-          <div className={headline} data-tour="private-links">
+          <div className={headline}>
             <PanelHeading>Private links</PanelHeading>
             <div
               className={`mt-1.5 leading-none font-medium tracking-[-0.03em] text-moss tabular-nums ${
@@ -227,7 +227,6 @@ function Stat({
   value,
   unit,
   accent,
-  tour,
   compact = false,
   animate = true,
   className = '',
@@ -236,15 +235,13 @@ function Stat({
   value: number | string;
   unit?: string;
   accent?: string;
-  /** Names the tile in the markup (data-tour). */
-  tour?: string;
   compact?: boolean;
   animate?: boolean;
   className?: string;
 }) {
   const size = compact ? 'text-[26px]' : 'text-[32px]';
   return (
-    <div data-tour={tour} className={`${compact ? 'px-4 py-3' : 'px-5 py-3.5'} ${className}`}>
+    <div className={`${compact ? 'px-4 py-3' : 'px-5 py-3.5'} ${className}`}>
       <PanelHeading>{label}</PanelHeading>
       <div className="mt-1.5 flex items-baseline gap-1.5">
         {animate ? (

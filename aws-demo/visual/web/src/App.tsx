@@ -3,16 +3,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { InstanceCard } from './components/InstanceCard';
 import { MeshMap } from './components/MeshMap';
-import { Narrative } from './components/Narrative';
 import { StatsPanel } from './components/StatsPanel';
 import { fleetAspect } from './camera';
 import { buildIntraLinks, buildLinks, buildRegions } from './mesh';
 import { useFeed } from './useFeed';
 import { useMesh } from './useMesh';
 import { MIN_MAP_ASPECT, type Viewport, usePrefersReducedMotion, useViewport } from './viewport';
-
-const TOUR_MS = 7000;
-const IDLE_RESUME_MS = 15000;
 
 export function App() {
   const vp = useViewport();
@@ -27,15 +23,7 @@ export function App() {
 
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  // Zooming or panning hands the screen to the visitor; the spotlight waits.
-  const [steering, setSteering] = useState(false);
-
-  const tour = useTour(
-    regions.map((r) => r.location),
-    regions.find((r) => r.isSelf)?.location ?? null,
-    !!(hovered || selected) || reducedMotion || steering
-  );
-  const focus = hovered ?? selected ?? tour;
+  const focus = hovered ?? selected;
   const selectedRegion = regions.find((r) => r.location === selected) ?? null;
   useDismissOnOutside(!!selected, () => setSelected(null));
 
@@ -167,7 +155,6 @@ export function App() {
                 receivedAt={receivedAt}
                 onHover={vp.compact ? noop : setHovered}
                 onSelect={setSelected}
-                onEngage={setSteering}
               />
             )}
             <AnimatePresence>
@@ -182,22 +169,6 @@ export function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-          <div
-            className={
-              vp.stacked ? `${stackedColumn(vp)} pt-1` : `border-t border-line-7 ${vp.compact ? 'pt-4' : 'pt-6'}`
-            }
-          >
-            <div className={`flex items-center ${vp.compact ? 'gap-3' : 'gap-6'}`}>
-              <div className={`min-w-0 flex-1 ${vp.compact ? 'min-h-[38px]' : 'min-h-[56px]'}`}>
-                <Narrative
-                  staticDiscovery={view?.discovery === 'static'}
-                  compact={vp.compact}
-                  short={vp.mode === 'phone' || vp.mode === 'landscape'}
-                  paused={reducedMotion}
-                />
-              </div>
-            </div>
           </div>
           {/* Softens the seam where cards scroll under the pinned map. */}
           {vp.stacked && (
@@ -294,37 +265,6 @@ function stackedColumn(vp: Viewport): string {
 function stackedMapHeight(vp: Viewport, aspect: number): number {
   const share = vp.columns === 2 ? 0.42 : vp.mode === 'tablet' ? 0.46 : 0.44;
   return Math.round(Math.max(200, Math.min(vp.width / aspect, vp.height * share)));
-}
-
-/** Cycles the spotlight through regions, starting where the page was served. */
-function useTour(locations: string[], selfLocation: string | null, paused: boolean): string | null {
-  const [current, setCurrent] = useState<string | null>(null);
-  const resumeAt = useRef(0);
-  const key = locations.join(',');
-
-  useEffect(() => {
-    if (paused) resumeAt.current = Date.now() + IDLE_RESUME_MS;
-  }, [paused]);
-
-  useEffect(() => {
-    if (locations.length === 0) {
-      setCurrent(null);
-      return;
-    }
-    setCurrent((c) => (c && locations.includes(c) ? c : (selfLocation ?? locations[0])));
-    const id = window.setInterval(() => {
-      if (Date.now() < resumeAt.current) return;
-      setCurrent((c) => {
-        const order = selfLocation ? [selfLocation, ...locations.filter((l) => l !== selfLocation)] : locations;
-        const i = c ? order.indexOf(c) : -1;
-        return order[(i + 1) % order.length];
-      });
-    }, TOUR_MS);
-    return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, selfLocation]);
-
-  return current;
 }
 
 /**

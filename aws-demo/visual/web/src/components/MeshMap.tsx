@@ -42,8 +42,6 @@ interface Props {
   receivedAt: number;
   onHover: (location: string | null) => void;
   onSelect: (location: string | null) => void;
-  /** Tells the page the visitor is steering, so the spotlight tour stands by. */
-  onEngage?: (engaged: boolean) => void;
 }
 
 function projector(cam: Camera, width: number): ToPx {
@@ -78,7 +76,6 @@ function MeshMapImpl({
   receivedAt,
   onHover,
   onSelect,
-  onEngage,
 }: Props) {
   const aspect = width / height;
   // Re-frame only when the set of places or the shape of the map changes,
@@ -115,8 +112,6 @@ function MeshMapImpl({
   // Clear the replicas' own names too, which sit just under their pins; with
   // five in one location there is a replica on every side of the anchor.
   const labelOffset = (compact ? 14 : 18) + labelSpread + 18 * settledExpansion;
-
-  useEffect(() => onEngage?.(engaged), [engaged, onEngage]);
 
   const replicas = useMemo(
     () => layOutReplicas(regions, unit, radius, expansion),
