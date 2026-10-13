@@ -8,13 +8,13 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 bin/setup [N]            a fleet of N nodes (default 3), several per region if N exceeds the regions; re-run to repair
 bin/setup --add [N]     add N more nodes (default 3)
 REGIONS="eu ap-southeast-1" bin/setup 10   spread 10 nodes over these regions (space or comma separated); an entry is an
-                        AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there (the default pool is 17 regions; set `POOL` to change it)
+                        AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there (the default pool is 17 regions; set `POOL` to change it). Setup probes the regions first and leaves out any the operator policy denies, with a warning
 bin/status               nodes, SSM state, the gateway, each member's address
 bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a region means its first node)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
 bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
-bin/teardown [--purge]   delete everything setup created; with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool (KEEP_NET=1 keeps the network, gateway and viewer)
+bin/teardown [--purge]   delete everything setup created; with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool (KEEP_NET=1 keeps the network, gateway and viewer). `NODES="us-east-1-0 ..." bin/teardown` removes just those nodes and leaves the rest of the fleet, the network and the gateway alone; to move a node to another region, remove it that way and then `REGIONS=<region> bin/setup --add 1`
 ```
 
 You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin`. `nix develop` (see `flake.nix`) provides everything except `datumctl`, which is not in nixpkgs; `bin/login` and `bin/netcheck` also fetch the plugin with nix-shell if it is missing.

@@ -122,6 +122,18 @@ expand_regions() {
   sed '/^$/d' <<<"$out" | awk '!s[$0]++'
 }
 
+# denied_regions REGION...: print those the caller's policy explicitly denies (probed in parallel).
+# Anything else, including a transient error, counts as allowed.
+denied_regions() {
+  local r d out; d=$(mktemp -d)
+  for r; do
+    ( out=$(aws ec2 describe-instances --region "$r" --max-results 5 --query 'length(Reservations)' --output text 2>&1) ||
+        case $out in *UnauthorizedOperation*|*AccessDenied*|*"explicit deny"*) touch "$d/$r" ;; esac ) &
+  done
+  wait
+  ls "$d"; rm -rf "$d"
+}
+
 # gateway_for_net -> name of the gateway already serving $NET at $GW_LOCATION (the conventional
 # name first, else any, such as a join's hash-suffixed one); empty if none
 gateway_for_net() {

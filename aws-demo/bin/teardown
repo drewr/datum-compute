@@ -4,14 +4,17 @@
 #
 #   bin/teardown               the nodes in state/<fleet>/nodes.txt
 #   REGIONS="a b" bin/teardown  with no state: find this fleet's instances in those regions
-#   NODES="us-east-1-0 ..." bin/teardown   exactly these nodes
+#   NODES="us-east-1-0 ..." bin/teardown   exactly these nodes; the rest of the fleet, the network and the gateway stay
 #   bin/teardown --purge       also delete the shared permissions boundary policy
 #   KEEP_NET=1 bin/teardown    remove the fleet only; keep the network, gateway and viewer
 . "$(dirname "$0")/../lib/common.sh"
 preflight
 PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
 if [ -n "${NODES:-}" ]; then
-  tr ' ' '\n' <<<"$NODES" >"$nodes_file"
+  # work on a partial list so the fleet's own nodes.txt keeps its other nodes; the network stays
+  real_nodes=$nodes_file; nodes_file=$STATE_DIR/nodes.partial
+  tr ' ' '\n' <<<"$NODES" | sed '/^$/d' >"$nodes_file"
+  KEEP_NET=1
 elif [ ! -s "$nodes_file" ]; then
   # no state file: find the fleet's instances in REGIONS (names or continents), else in every pool region
   for r in $(expand_regions "${REGIONS:-$POOL}" || exit 1); do
@@ -50,5 +53,8 @@ if [ "$PURGE" = 1 ]; then
   aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT:policy/$BOUNDARY" 2>&1 | tail -1
 fi
 # bad-names survives: a stuck Datum name stays stuck after teardown
-if [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else find "$STATE_DIR" -mindepth 1 -not -name bad-names -delete; fi
+if [ -n "${real_nodes:-}" ]; then
+  [ ! -f "$real_nodes" ] || { grep -vxFf "$nodes_file" "$real_nodes" >"$real_nodes.new"; mv "$real_nodes.new" "$real_nodes"; }
+  rm -f "$nodes_file"
+elif [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else find "$STATE_DIR" -mindepth 1 -not -name bad-names -delete; fi
 say "done"
