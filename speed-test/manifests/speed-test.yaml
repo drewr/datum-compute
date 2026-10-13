@@ -49,9 +49,7 @@ spec:
         sandbox:
           containers:
           - name: app
-            # Not pushed yet: replace with the speed-test-uk digest after the
-            # first build.
-            image: ghcr.io/drewr/speed-test-uk@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            image: ghcr.io/drewr/speed-test-uk@sha256:9ee4e95d0baffc82ce22d2e700e37497aa23608b23ca25908222243d5d9d0406
             ports:
             - name: http
               port: 8080
