@@ -1,7 +1,7 @@
-# Speed test (TypeScript on Node.js) on the unikernel class, published at a
-# Datum-managed HTTPS URL and at https://speed.draines.com. LOCATION names
-# the placement's location for the page's map and server details; keep the
-# two in step.
+# Speed test (TypeScript on Node.js) on the unikernel class in the
+# datum-cloud project, published at a Datum-managed HTTPS URL and at
+# https://speed.datum.net. LOCATION names the placement's location for the
+# page's map and server details; keep the two in step.
 #
 # Built like todo-app (see ../../todo-app/manifests/todo-app.yaml for why each
 # step is the way it is):
@@ -15,13 +15,14 @@
 # (https://github.com/datum-cloud/compute/issues/432). Refer to the unikernel
 # image by digest only. The first deploy gives the workload its URL:
 #
-#   datumctl compute deploy speed-test --image=<speed-test-uk@digest> --location=us-central-1 \
-#     --runtime-class=unikernel --http-port=8080 --env=LOCATION=us-central-1
-#   datumctl dns record set draines.com speed CNAME <new>.datumproxy.net.
-#   datumctl alb hostname add speed-test speed.draines.com
+#   datumctl compute deploy speed-test --project=datum-cloud --image=<speed-test-uk@digest> \
+#     --location=us-central-1 --runtime-class=unikernel --http-port=8080 --env=LOCATION=us-central-1
+#   datumctl dns record set datum.net speed CNAME <new>.datumproxy.net. --project=datum-cloud
+#   datumctl alb hostname add speed-test speed.datum.net --project=datum-cloud
 #
 # Later image changes: put the new digest below and run
-# datumctl compute deploy -f manifests/speed-test.yaml (keeps the URL).
+# datumctl compute deploy -f manifests/speed-test.yaml --project=datum-cloud
+# (keeps the URL).
 apiVersion: compute.datumapis.com/v1alpha
 kind: Workload
 metadata:
