@@ -19,7 +19,7 @@ bin/teardown [--purge]   delete everything setup created (KEEP_NET=1 keeps the n
 
 You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin`. `nix develop` (see `flake.nix`) provides everything except `datumctl`, which is not in nixpkgs; `bin/login` and `bin/netcheck` also fetch the plugin with nix-shell if it is missing.
 The AWS account comes from `aws sts get-caller-identity` and the Datum org and project from
-`datumctl whoami` (override with `ORG=` and `PROJECT=`). Run `bin/setup` again to resume or repair.
+`datumctl whoami` (override with `ORG=` and `PROJECT=`). Run `bin/setup` again to resume or repair. It prints the elapsed time (min:sec) when it finishes, on success or failure.
 
 **Fleet name.** Every resource, AWS and Datum, is named after the fleet: `FLEET_PREFIX` (default
 `drewr-`) plus the AWS user name, lowercased, such as `drewr-demo261009`. Members are

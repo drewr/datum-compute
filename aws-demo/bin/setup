@@ -15,6 +15,8 @@
 # Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
 # (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
 . "$(dirname "$0")/../lib/common.sh"
+SECONDS=0
+trap 'rc=$?; say "took $((SECONDS / 60)):$(printf %02d $((SECONDS % 60))) (min:sec)"; exit $rc' EXIT
 preflight
 
 # ---- 0. pick nodes --------------------------------------------------------------------------
