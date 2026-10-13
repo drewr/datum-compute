@@ -26,7 +26,7 @@ The AWS account comes from `aws sts get-caller-identity` and the Datum org and p
 nodes named `<fleet>-<region>-<n>` (`n` counts from 0 within a region, e.g. `drewr-demo261009-eu-west-2-1`), the network is `<fleet>-net` and state lives in `state/<fleet>/`, so fleets of
 different users can run side by side in one account and Datum project. The Datum gateway quota (3 on
 staging) and `bin/teardown --purge` (it deletes the account's shared boundary policy) are the limits.
-Set `FLEET` to override the name. The operator policy grants only names that start with
+Set `FLEET` to override the name; as an operator user it must be the default name or extend it (`drewr-demo261009-b`), and `bin/setup` stops early otherwise. The operator policy grants only names that start with
 `<FLEET_PREFIX><user name>-`, so re-run `bin/bootstrap-iam` after changing the naming.
 
 The rest of this file explains how the pieces fit together, in the order you would build them by hand.

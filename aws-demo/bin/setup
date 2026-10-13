@@ -18,6 +18,7 @@
 SECONDS=0
 trap 'rc=$?; say "took $((SECONDS / 60)):$(printf %02d $((SECONDS % 60))) (min:sec)"; exit $rc' EXIT
 preflight
+check_fleet_name
 
 # ---- 0. pick nodes --------------------------------------------------------------------------
 add='' args=()

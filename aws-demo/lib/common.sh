@@ -53,6 +53,20 @@ preflight() {
   export ACCOUNT ORG PROJECT PROJECT_UID FLEET
 }
 
+# check_fleet_name: the operator policy grants only AWS names that start with <FLEET_PREFIX><user>-, so
+# a FLEET override must be that name or extend it (drewr-demo261009-b). Checked by setup only, so
+# teardown can still clean up a fleet that was named wrongly.
+check_fleet_name() {
+  local arn base; arn=$(aws sts get-caller-identity --query Arn --output text) || return 0
+  case $arn in *:user/*) ;; *) return 0 ;; esac
+  base=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
+  case $FLEET in
+    "$base"|"$base"-*) ;;
+    *) die "FLEET $FLEET is not allowed for $arn: the operator policy only grants names starting $base-
+       use the default (unset FLEET) or an extension such as FLEET=$base-b" ;;
+  esac
+}
+
 dc()  { datumctl --project "$PROJECT" "$@"; }       # project-scoped
 dco() { datumctl --organization "$ORG" "$@"; }      # org-scoped (PolicyBindings)
 
