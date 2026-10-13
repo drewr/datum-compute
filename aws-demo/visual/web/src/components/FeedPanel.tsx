@@ -12,6 +12,8 @@ interface Props {
   selfAddress?: string | null;
   /** When the page last heard from the fleet. */
   servedAt: number;
+  paused?: boolean;
+  onTogglePause?: () => void;
   compact?: boolean;
   reducedMotion?: boolean;
   /** Rows to show where the list has no height of its own to fill. */
@@ -48,6 +50,8 @@ export function FeedPanel({
   selfLocation,
   selfAddress,
   servedAt,
+  paused = false,
+  onTogglePause,
   compact = false,
   reducedMotion = false,
   limit = 9,
@@ -63,9 +67,22 @@ export function FeedPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-baseline justify-between">
         <PanelHeading>Live traffic</PanelHeading>
-        <span className="flex items-center gap-1.5 text-[11px] text-ink-35">
-          <span className="size-1.5 rounded-full bg-up shadow-[0_0_8px_var(--status-up)]" />
-          now
+        <span className="flex items-center gap-2 text-[11px] text-ink-35">
+          <span
+            className={`size-1.5 rounded-full ${paused ? 'bg-degraded' : 'bg-up shadow-[0_0_8px_var(--status-up)]'}`}
+          />
+          {paused ? 'paused' : 'now'}
+          {onTogglePause && (
+            <button
+              type="button"
+              onClick={onTogglePause}
+              aria-pressed={paused}
+              title={paused ? 'Resume live updates (space)' : 'Pause updates to read the numbers (space)'}
+              className="rounded-full border border-line-10 bg-wash-3 px-2.5 py-0.5 text-[11px] font-medium text-ink-85 hover:bg-wash-4"
+            >
+              {paused ? 'Resume' : 'Pause'}
+            </button>
+          )}
         </span>
       </div>
 

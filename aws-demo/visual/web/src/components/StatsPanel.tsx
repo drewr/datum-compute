@@ -30,6 +30,8 @@ interface Props {
   regions: Region[];
   links: Link[];
   feed: Feed;
+  paused?: boolean;
+  onTogglePause?: () => void;
   /** When the page last heard from the fleet, for the visitor's own line. */
   servedAt: number;
   /** Rows of live traffic to show. */
@@ -54,6 +56,8 @@ export function StatsPanel({
   regions,
   links,
   feed,
+  paused,
+  onTogglePause,
   servedAt,
   feedLimit = 9,
   activityLimit = 5,
@@ -130,6 +134,8 @@ export function StatsPanel({
       <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''} ${pad}`}>
         <FeedPanel
           entries={feed.entries}
+          paused={paused}
+          onTogglePause={onTogglePause}
           selfCity={selfRegion?.city ?? null}
           selfLocation={selfRegion?.location ?? null}
           selfAddress={selfInstance?.privateIP ?? null}

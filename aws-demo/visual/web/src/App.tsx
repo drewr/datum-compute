@@ -87,17 +87,6 @@ export function App() {
           {view?.discovery === 'static' && !vp.compact && (
             <span className="text-[12px] tracking-[0.08em] text-ink-30 uppercase">Static peers</span>
           )}
-          <button
-            type="button"
-            onClick={() => setPaused((p) => !p)}
-            aria-pressed={paused}
-            title={paused ? 'Resume live updates (space)' : 'Pause updates to read the numbers (space)'}
-            className={`rounded-full border border-line-10 font-medium tracking-[0.14em] uppercase hover:bg-wash-4 ${
-              paused ? 'bg-wash-4 text-degraded' : 'bg-wash-3 text-ink-85'
-            } ${vp.compact ? 'px-3 py-1 text-[10px]' : 'px-4 py-1.5 text-[12px]'}`}
-          >
-            {paused ? 'Resume' : 'Pause'}
-          </button>
           {view?.mode === 'simulate' ? (
             <span
               className={`rounded-full border border-line-10 bg-wash-3 font-medium tracking-[0.14em] text-ink-55 uppercase ${
@@ -226,6 +215,8 @@ export function App() {
             regions={regions}
             links={links}
             feed={feed}
+            paused={paused}
+            onTogglePause={() => setPaused((p) => !p)}
             servedAt={servedAt}
             // Where the feeds have a column with a height they fill it and
             // these are ignored. Down a scrolling page there is nothing to
