@@ -49,7 +49,7 @@ spec:
         sandbox:
           containers:
           - name: app
-            image: ghcr.io/drewr/speed-test-uk@sha256:9ee4e95d0baffc82ce22d2e700e37497aa23608b23ca25908222243d5d9d0406
+            image: ghcr.io/drewr/speed-test-uk@sha256:ff5fb52560a6c91a78211d0b704107ffa75b2652f9fc00564c026223b90edfcf
             ports:
             - name: http
               port: 8080
