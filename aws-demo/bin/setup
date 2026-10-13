@@ -283,7 +283,7 @@ run_wave() { # nodes...: run one_node for each, in parallel
   for nd; do
     rm -f "$STATE_DIR/logs/$nd.rc"
     throttle
-    say "$nd: starting"
+    if [[ " ${new[*]:-} " == *" $nd "* ]]; then say "$nd: starting"; else say "$nd: checking (already in the fleet)"; fi
     ( one_node "$nd" >"$STATE_DIR/logs/$nd.log" 2>&1; echo $? >"$STATE_DIR/logs/$nd.rc" ) &
   done
   wait
