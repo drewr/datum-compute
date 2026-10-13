@@ -15,8 +15,10 @@ export function App() {
   const reducedMotion = usePrefersReducedMotion();
   const mapArea = useRef<HTMLDivElement>(null);
   const mapSize = useMapSize(mapArea, vp);
-  const { view, receivedAt, stale } = useMesh(2000);
-  const feed = useFeed(view);
+  const [paused, setPaused] = useState(false);
+  const { view, receivedAt, stale } = useMesh(2000, paused);
+  const feed = useFeed(view, !paused);
+  useSpaceToggle(() => setPaused((p) => !p));
   const regions = useMemo(() => buildRegions(view), [view]);
   const links = useMemo(() => buildLinks(view, regions), [view, regions]);
   const intraLinks = useMemo(() => buildIntraLinks(view, regions), [view, regions]);
@@ -85,6 +87,17 @@ export function App() {
           {view?.discovery === 'static' && !vp.compact && (
             <span className="text-[12px] tracking-[0.08em] text-ink-30 uppercase">Static peers</span>
           )}
+          <button
+            type="button"
+            onClick={() => setPaused((p) => !p)}
+            aria-pressed={paused}
+            title={paused ? 'Resume live updates (space)' : 'Pause updates to read the numbers (space)'}
+            className={`rounded-full border border-line-10 font-medium tracking-[0.14em] uppercase hover:bg-wash-4 ${
+              paused ? 'bg-wash-4 text-degraded' : 'bg-wash-3 text-ink-85'
+            } ${vp.compact ? 'px-3 py-1 text-[10px]' : 'px-4 py-1.5 text-[12px]'}`}
+          >
+            {paused ? 'Resume' : 'Pause'}
+          </button>
           {view?.mode === 'simulate' ? (
             <span
               className={`rounded-full border border-line-10 bg-wash-3 font-medium tracking-[0.14em] text-ink-55 uppercase ${
@@ -102,12 +115,12 @@ export function App() {
               <span className="relative flex size-2">
                 <span
                   className={`absolute inline-flex h-full w-full rounded-full opacity-60 ${
-                    stale ? 'bg-degraded' : 'animate-ping bg-up'
+                    stale || paused ? 'bg-degraded' : 'animate-ping bg-up'
                   }`}
                 />
-                <span className={`relative inline-flex size-2 rounded-full ${stale ? 'bg-degraded' : 'bg-up'}`} />
+                <span className={`relative inline-flex size-2 rounded-full ${stale || paused ? 'bg-degraded' : 'bg-up'}`} />
               </span>
-              <span className={stale ? 'text-degraded' : 'text-ink-85'}>{stale ? 'Reconnecting' : 'Live'}</span>
+              <span className={stale || paused ? 'text-degraded' : 'text-ink-85'}>{paused ? 'Paused' : stale ? 'Reconnecting' : 'Live'}</span>
             </span>
           )}
         </motion.div>
@@ -234,6 +247,21 @@ export function App() {
 }
 
 function noop() {}
+
+/** Space toggles pause, unless a control has focus and would take it itself. */
+function useSpaceToggle(toggle: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || e.repeat) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest('button, a, input, textarea, select') || t.isContentEditable)) return;
+      e.preventDefault();
+      toggle();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [toggle]);
+}
 
 /** Rows a list carries down a page of this height, held between two limits. */
 function rowsFor(height: number, per: number, min: number, max: number): number {
