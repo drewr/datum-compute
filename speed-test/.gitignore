@@ -1,0 +1,5 @@
+# nix-build output links
+result*
+# Node build output
+app/node_modules/
+app/dist/

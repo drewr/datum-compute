@@ -1,0 +1,61 @@
+# Speed test (TypeScript on Node.js) on the unikernel class, published at a
+# Datum-managed HTTPS URL. LOCATION names the placement's location for the
+# page's map and server details; keep the two in step.
+#
+# Built like todo-app (see ../../todo-app/manifests/todo-app.yaml for why each
+# step is the way it is):
+#
+#   nix-build -A app -o result
+#   skopeo copy --digestfile digest docker-archive:result docker://ghcr.io/drewr/speed-test:<tag>
+#   echo "FROM ghcr.io/drewr/speed-test@$(cat digest)" > uk/Dockerfile
+#   datumctl compute build uk --analyze --push --output ghcr.io/drewr/speed-test-uk:<tag>
+#
+# Both ghcr packages must be public: a flag deploy drops imagePullSecrets
+# (https://github.com/datum-cloud/compute/issues/432). Refer to the unikernel
+# image by digest only. The first deploy gives the workload its URL:
+#
+#   datumctl compute deploy speed-test --image=<speed-test-uk@digest> --location=us-central-1 \
+#     --runtime-class=unikernel --http-port=8080 --env=LOCATION=us-central-1
+#
+# Later image changes: put the new digest below and run
+# datumctl compute deploy -f manifests/speed-test.yaml (keeps the URL).
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: speed-test
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      instanceManagementPolicy: OrderedReady
+      minReplicas: 1
+  template:
+    metadata: {}
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies:
+        - IPv6
+        network:
+          name: default
+        reclaimPolicy: Delete
+      runtime:
+        class: unikernel
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          containers:
+          - name: app
+            # Not pushed yet: replace with the speed-test-uk digest after the
+            # first build.
+            image: ghcr.io/drewr/speed-test-uk@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            ports:
+            - name: http
+              port: 8080
+              protocol: TCP
+            env:
+            - name: LOCATION
+              value: us-central-1
