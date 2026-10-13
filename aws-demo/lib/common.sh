@@ -25,13 +25,17 @@ need() { for c in "$@"; do command -v "$c" >/dev/null || die "missing command: $
 # operator under different users, can run side by side. Set FLEET to override.
 set_fleet() {
   local arn; arn=$(aws sts get-caller-identity --query Arn --output text) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}"
-  [ -n "${FLEET:-}" ] || FLEET=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
+  local base; base=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
+  [ -n "${FLEET:-}" ] || FLEET=$base
+  # The operator policy grants SSM parameters only under /<FLEET_PREFIX><user>/, so keys of an extended
+  # FLEET (drewr-demo261009-b) live under that root rather than under /<fleet>/.
+  case $arn in *:user/*) KEY_ROOT=$base ;; *) KEY_ROOT=$FLEET ;; esac
   [ "${#FLEET}" -le 40 ] || die "fleet name $FLEET is longer than 40 characters; set a shorter FLEET_PREFIX or FLEET"
   NET=${NET:-$FLEET-net}                          # Datum Network (VPC) for the fleet
   STATE_DIR=${STATE_DIR:-$DEMO_DIR/state/$FLEET}
   mkdir -p "$STATE_DIR/logs"
   nodes_file=$STATE_DIR/nodes.txt
-  export FLEET NET STATE_DIR
+  export FLEET NET STATE_DIR KEY_ROOT
 }
 
 preflight() {
@@ -124,7 +128,7 @@ throttle() { while [ "$(jobs -rp | wc -l)" -ge "${JOBS:-12}" ]; do wait -n; done
 tmpl() { local f=$1 s; shift; s=$(cat "$f"); for kv in "$@"; do s=${s//__${kv%%=*}__/${kv#*=}}; done; printf '%s\n' "$s"; }
 
 member()    { echo "$FLEET-$1"; }                      # node -> name of that member everywhere (role, profile, SG, Name tag, ServiceAccount, connector)
-key_param() { echo "/$FLEET/$(node_region "$1")/$(node_index "$1")/key"; }   # node -> SSM parameter holding that member's Datum key
+key_param() { echo "/$KEY_ROOT/$FLEET/$(node_region "$1")/$(node_index "$1")/key"; }   # node -> SSM parameter holding that member's Datum key
 
 instance_id() { # node -> id of the live instance
   aws ec2 describe-instances --region "$(node_region "$1")" \

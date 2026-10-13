@@ -63,7 +63,7 @@ Each instance gets its own service account so it can be attributed and revoked o
 
 - a `ServiceAccount` `<fleet>-<region>-<n>`;
 - a `ServiceAccountKey`, whose private key is returned once and piped straight into AWS SSM
-  Parameter Store as a SecureString at `/<fleet>/<region>/<n>/key`. It is never printed or
+  Parameter Store as a SecureString at `/<user fleet name>/<fleet>/<region>/<n>/key` (the operator policy grants only the path under your user's default fleet name). It is never printed or
   written to disk, and never put in user-data;
 - a `PolicyBinding` to the `editor` role on the project. `editor` is the only assignable role
   that inherits connect admin on staging, so it is broader than we would like (see the end).
