@@ -40,24 +40,7 @@ cand=
 explicit=
 if [ -n "${REGIONS:-}" ]; then
   explicit=1
-  for t in $(tr ',[:upper:]' ' [:lower:]' <<<"$REGIONS"); do
-    pat=
-    case $t in
-      na|north-america|americas) pat='us-|ca-' ;;
-      sa|south-america) pat='sa-' ;;
-      eu|europe) pat='eu-' ;;
-      ap|asia|apac|asia-pacific) pat='ap-' ;;
-      me|middle-east) pat='me-|il-' ;;
-      af|africa) pat='af-' ;;
-      *-*-[0-9]*) cand=$(printf '%s\n%s\n' "$cand" "$t") ;;
-      *) die "REGIONS: '$t' is neither a region name (like us-east-1) nor a continent (na, sa, eu, ap, me, af)" ;;
-    esac
-    if [ -n "$pat" ]; then
-      got=$(tr ' ' '\n' <<<"$POOL" | grep -E "^($pat)" || true)
-      [ -n "$got" ] || die "REGIONS: no pool region on '$t' (POOL: $POOL)"
-      cand=$(printf '%s\n%s\n' "$cand" "$got")
-    fi
-  done
+  cand=$(expand_regions "$REGIONS") || exit 1
 else
   # shellcheck disable=SC2086
   cand=$(tr ' ' '\n' <<<$POOL | shuf)

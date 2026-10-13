@@ -14,7 +14,7 @@ bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a re
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
 bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
-bin/teardown [--purge]   delete everything setup created (KEEP_NET=1 keeps the network, gateway and viewer)
+bin/teardown [--purge]   delete everything setup created; with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool (KEEP_NET=1 keeps the network, gateway and viewer)
 ```
 
 You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin`. `nix develop` (see `flake.nix`) provides everything except `datumctl`, which is not in nixpkgs; `bin/login` and `bin/netcheck` also fetch the plugin with nix-shell if it is missing.

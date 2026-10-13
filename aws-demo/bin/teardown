@@ -12,14 +12,15 @@ preflight
 PURGE=0; [ "${1:-}" = --purge ] && PURGE=1
 if [ -n "${NODES:-}" ]; then
   tr ' ' '\n' <<<"$NODES" >"$nodes_file"
-elif [ -n "${REGIONS:-}" ] && [ ! -s "$nodes_file" ]; then
-  for r in $REGIONS; do
+elif [ ! -s "$nodes_file" ]; then
+  # no state file: find the fleet's instances in REGIONS (names or continents), else in every pool region
+  for r in $(expand_regions "${REGIONS:-$POOL}" || exit 1); do
     aws ec2 describe-instances --region "$r" --filters "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" \
       Name=instance-state-name,Values=pending,running,stopping,stopped \
-      --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value' --output text | tr '\t' '\n' | sed "s/^$FLEET-//" | grep -E -- '-[0-9]+$'
+      --query 'Reservations[].Instances[].Tags[?Key==`Name`].Value' --output text 2>/dev/null | tr '\t' '\n' | sed "s/^$FLEET-//" | grep -E -- '-[0-9]+$'
   done >"$nodes_file"
 fi
-[ -s "$nodes_file" ] || die "no nodes known (no $nodes_file); set NODES=\"us-east-1-0 ...\" or REGIONS=\"...\""
+[ -s "$nodes_file" ] || warn "no nodes found for $FLEET (no $nodes_file and no tagged instances); removing only the Datum network and gateways. Set NODES=\"us-east-1-0 ...\" or REGIONS=\"...\" to look elsewhere"
 GW=connect-$NET-$GW_LOCATION
 
 aws_down() {

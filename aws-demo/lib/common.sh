@@ -71,6 +71,31 @@ resolve_node() {
   die "no node or region '$x' in this fleet (nodes: $(nodes | tr '\n' ' '))"
 }
 
+# expand_regions LIST -> one AWS region per line. Each entry (space or comma separated) is a region
+# name or a continent alias (na, sa, eu, ap, me, af) meaning every POOL region there.
+expand_regions() {
+  local t pat got out=
+  for t in $(tr ',[:upper:]' ' [:lower:]' <<<"$1"); do
+    pat=
+    case $t in
+      na|north-america|americas) pat='us-|ca-' ;;
+      sa|south-america) pat='sa-' ;;
+      eu|europe) pat='eu-' ;;
+      ap|asia|apac|asia-pacific) pat='ap-' ;;
+      me|middle-east) pat='me-|il-' ;;
+      af|africa) pat='af-' ;;
+      *-*-[0-9]*) out=$(printf '%s\n%s\n' "$out" "$t") ;;
+      *) warn "REGIONS: '$t' is neither a region name (like us-east-1) nor a continent (na, sa, eu, ap, me, af)"; return 1 ;;
+    esac
+    if [ -n "$pat" ]; then
+      got=$(tr ' ' '\n' <<<"$POOL" | grep -E "^($pat)" || true)
+      [ -n "$got" ] || { warn "REGIONS: no pool region on '$t' (POOL: $POOL)"; return 1; }
+      out=$(printf '%s\n%s\n' "$out" "$got")
+    fi
+  done
+  sed '/^$/d' <<<"$out" | awk '!s[$0]++'
+}
+
 # throttle: wait until fewer than ${JOBS:-12} background jobs are running
 throttle() { while [ "$(jobs -rp | wc -l)" -ge "${JOBS:-12}" ]; do wait -n; done; }
 
