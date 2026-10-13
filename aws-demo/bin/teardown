@@ -23,31 +23,6 @@ fi
 [ -s "$nodes_file" ] || warn "no nodes found for $FLEET (no $nodes_file and no tagged instances); removing only the Datum network and gateways. Set NODES=\"us-east-1-0 ...\" or REGIONS=\"...\" to look elsewhere"
 GW=connect-$NET-$GW_LOCATION
 
-aws_down() {
-  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
-  local ids; ids=$(aws ec2 describe-instances --region "$r" --filters "Name=tag:Name,Values=$n" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" \
-    Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
-  if [ -n "$ids" ]; then
-    # shellcheck disable=SC2086
-    aws ec2 terminate-instances --region "$r" --instance-ids $ids >/dev/null
-    # shellcheck disable=SC2086
-    aws ec2 wait instance-terminated --region "$r" --instance-ids $ids
-  fi
-  local sg; sg=$(aws ec2 describe-security-groups --region "$r" --filters Name=group-name,Values="$n" "Name=tag:project,Values=$TAG" "Name=tag:fleet,Values=$FLEET" --query 'SecurityGroups[0].GroupId' --output text)
-  [ "$sg" != None ] && for _ in 1 2 3 4 5 6; do aws ec2 delete-security-group --region "$r" --group-id "$sg" 2>/dev/null && break; sleep 10; done
-  local owner; owner=$(aws iam get-role --role-name "$n" --query 'Role.Tags[?Key==`fleet`].Value | [0]' --output text 2>/dev/null)
-  if [ -n "$owner" ] && [ "$owner" != "$FLEET" ]; then
-    echo "$nd: role $n belongs to fleet ${owner/None/(none)}, not $FLEET; leaving the role, profile and key"
-    return 0
-  fi
-  aws iam remove-role-from-instance-profile --instance-profile-name "$n" --role-name "$n" 2>/dev/null
-  aws iam delete-instance-profile --instance-profile-name "$n" 2>/dev/null
-  aws iam delete-role-policy --role-name "$n" --policy-name own-key-and-ssm 2>/dev/null
-  aws iam delete-role --role-name "$n" 2>/dev/null
-  aws ssm delete-parameter --region "$r" --name "$(key_param "$nd")" 2>/dev/null
-  return 0
-}
-
 for nd in $(nodes); do
   throttle
   say "$nd: AWS teardown"
@@ -56,14 +31,8 @@ done
 
 bindings=$(dc get connectnetworkbindings -o json)
 for nd in $(nodes); do
-  n=$(member "$nd"); say "$nd: Datum teardown"
-  for b in $(jq -r --arg c "$n" '.items[]|select(.spec.connectorRef==$c)|.metadata.name' <<<"$bindings"); do
-    dc delete connectnetworkbindings "$b" >/dev/null 2>&1
-  done
-  dc delete connectors "$n" >/dev/null 2>&1
-  dco delete policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1
-  dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1
-  dc delete serviceaccounts "$n" >/dev/null 2>&1
+  say "$nd: Datum teardown"
+  datum_down "$nd" "$bindings"
 done
 if [ -z "${KEEP_NET:-}" ]; then
   "$(dirname "$0")/visual" --delete
@@ -80,5 +49,6 @@ wait
 if [ "$PURGE" = 1 ]; then
   aws iam delete-policy --policy-arn "arn:aws:iam::$ACCOUNT:policy/$BOUNDARY" 2>&1 | tail -1
 fi
-if [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else rm -rf "$STATE_DIR"; fi
+# bad-names survives: a stuck Datum name stays stuck after teardown
+if [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else find "$STATE_DIR" -mindepth 1 -not -name bad-names -delete; fi
 say "done"

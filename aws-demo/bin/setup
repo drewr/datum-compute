@@ -16,6 +16,7 @@
 # (a user that can create ServiceAccounts, PolicyBindings, Networks and ConnectGateways).
 . "$(dirname "$0")/../lib/common.sh"
 SECONDS=0
+RUN_ID=$(date +%s)
 trap 'rc=$?; say "took $((SECONDS / 60)):$(printf %02d $((SECONDS % 60))) (min:sec)"; exit $rc' EXIT
 preflight
 check_fleet_name
@@ -54,7 +55,7 @@ while read -r nd; do
   [ -n "$nd" ] || continue
   r=$(node_region "$nd"); i=$(node_index "$nd")
   [ "$i" -lt "${nextn[$r]:-0}" ] || nextn[$r]=$((i + 1))
-done <<<"$have"
+done < <(printf '%s\n%s\n' "$have" "$(bad_names)")   # bad names count too, so they are never picked again
 for r in $cand; do cnt[$r]=$(grep -c -x -- "$r-[0-9]*" <<<"$have"); done
 
 existing=$(grep -c . <<<"$have")
@@ -144,76 +145,98 @@ if ! aws iam get-policy --policy-arn "$BARN" >/dev/null 2>&1; then
 fi
 
 # ---- 3. per node: Datum identity + AWS instance --------------------------------------------
-sa_for() { # node: ServiceAccount, key -> SSM, PolicyBinding
-  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
-  local uid="" email="" i try
-  for try in 1 2; do
-    dc get serviceaccounts "$n" >/dev/null 2>&1 || dc create --validate=false -f - >/dev/null <<Y
+create_sa() { # name
+  dc create --validate=false -f - >/dev/null <<Y
 apiVersion: iam.miloapis.com/v1alpha1
 kind: ServiceAccount
-metadata: {name: $n}
+metadata: {name: $1}
 spec: {state: Active}
 Y
+}
+mint_key() { # name email -> prints the private key (returned only once); replaces an old key object
+  dc delete serviceaccountkeys "$1-key" >/dev/null 2>&1 || true
+  dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey
+apiVersion: identity.miloapis.com/v1alpha1
+kind: ServiceAccountKey
+metadata: {name: $1-key}
+spec: {serviceAccountUserName: $2}
+Y
+}
+put_key() { # region param key: the key goes in on stdin, never on a command line
+  aws ssm put-parameter --region "$1" --name "$2" --type SecureString --value file:///dev/stdin \
+    --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null <<<"$3"
+}
+create_binding() { # name uid; `editor` is the only assignable role that inherits connect admin on staging (broad; see README)
+  dco create --validate=false -n "organization-$ORG" -f - >/dev/null <<Y
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata: {name: $1-editor, namespace: organization-$ORG}
+spec:
+  resourceSelector: {resourceRef: {apiGroup: resourcemanager.miloapis.com, kind: Project, name: $PROJECT, uid: $PROJECT_UID}}
+  roleRef: {name: editor, namespace: datum-cloud}
+  subjects: [{kind: ServiceAccount, name: $1, uid: $2}]
+Y
+}
+
+sa_for() { # node: ServiceAccount, key -> SSM, PolicyBinding. Returns 3 if the name is stuck (no status even after a recreate)
+  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
+  local uid="" email="" i try gp key
+  for try in 1 2; do
+    retry dc get serviceaccounts "$n" >/dev/null 2>&1 || retry create_sa "$n"
     for i in $(seq 30); do
       uid=$(dc get serviceaccounts "$n" -o jsonpath='{.metadata.uid}' 2>/dev/null)
       email=$(dc get serviceaccounts "$n" -o jsonpath='{.status.email}' 2>/dev/null)
       [ -n "$uid" ] && [ -n "$email" ] && break; sleep 2
     done
     [ -n "$uid" ] && [ -n "$email" ] && break
-    # a service account whose status never filled in stays stuck; delete it so the next pass recreates it
+    # a service account whose status never filled in stays stuck; delete it and try once more
     [ "$try" = 1 ] && { warn "$nd: service account $n has no status after 60 s; recreating it"; dc delete serviceaccounts "$n" >/dev/null 2>&1; sleep 3; uid=; email=; }
   done
-  [ -n "$uid" ] && [ -n "$email" ] || die "service account $n never became ready"
-  if ! aws ssm get-parameter --region "$r" --name "$(key_param "$nd")" >/dev/null 2>&1; then
+  [ -n "$uid" ] && [ -n "$email" ] || { warn "service account $n never became ready"; return 3; }
+  gp=$(retry aws ssm get-parameter --region "$r" --name "$(key_param "$nd")" 2>&1 >/dev/null)
+  if [ $? -ne 0 ]; then
+    case $gp in
+      *ParameterNotFound*) ;;
+      *) warn "$nd: cannot read the key parameter: ${gp##*$'\n'}"; return 1 ;;
+    esac
     # The private key is only ever returned once; it goes straight into SSM and is never printed.
-    dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1 || true
-    dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey \
-      | aws ssm put-parameter --region "$r" --name "$(key_param "$nd")" --type SecureString \
-          --value file:///dev/stdin --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
-apiVersion: identity.miloapis.com/v1alpha1
-kind: ServiceAccountKey
-metadata: {name: $n-key}
-spec: {serviceAccountUserName: $email}
-Y
+    key=$(retry mint_key "$n" "$email")
+    if [ -z "$key" ] || [ "$key" = null ]; then warn "$nd: could not create a key for $n"; return 1; fi
+    retry put_key "$r" "$(key_param "$nd")" "$key" || { key=; dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1; warn "$nd: could not store the key in SSM; a re-run will mint a new one"; return 1; }
+    key=
   fi
-  # `editor` is the only assignable role that inherits connect admin on staging (broad; see README).
-  dco get policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1 || dco create --validate=false -n "organization-$ORG" -f - >/dev/null <<Y
-apiVersion: iam.miloapis.com/v1alpha1
-kind: PolicyBinding
-metadata: {name: $n-editor, namespace: organization-$ORG}
-spec:
-  resourceSelector: {resourceRef: {apiGroup: resourcemanager.miloapis.com, kind: Project, name: $PROJECT, uid: $PROJECT_UID}}
-  roleRef: {name: editor, namespace: datum-cloud}
-  subjects: [{kind: ServiceAccount, name: $n, uid: $uid}]
-Y
+  retry dco get policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1 || retry create_binding "$n" "$uid"
 }
 
-aws_for() { # node: role, profile, SG, instance (launches across default subnets until one works)
-  local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
+aws_for() { # node [pass]: role, profile, SG, instance (launches across default subnets until one works); pass makes the launch token unique per retry
+  local nd=$1 tok=${2:-1} r n iid; r=$(node_region "$nd"); n=$(member "$nd")
   aws iam get-role --role-name "$n" >/dev/null 2>&1 || {
-    aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
-      --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
+    retry aws iam create-role --role-name "$n" --assume-role-policy-document "file://$DEMO_DIR/iam/trust.json" \
+      --permissions-boundary "$BARN" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null || return 1
   }
-  aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
-    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$nd")")"
+  retry aws iam put-role-policy --role-name "$n" --policy-name own-key-and-ssm \
+    --policy-document "$(tmpl "$DEMO_DIR/iam/instance-policy.json" ACCOUNT="$ACCOUNT" REGION="$r" KEYPARAM="$(key_param "$nd")")" || return 1
   aws iam get-instance-profile --instance-profile-name "$n" >/dev/null 2>&1 || {
-    aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null
-    aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n"
+    retry aws iam create-instance-profile --instance-profile-name "$n" --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null || return 1
+    retry aws iam add-role-to-instance-profile --instance-profile-name "$n" --role-name "$n" || return 1
   }
-  [ -n "$(instance_id "$nd")" ] && { instance_id "$nd"; return 0; }
+  # a failed listing must not look like "no instance", or a retry would launch a duplicate
+  iid=$(instance_id "$nd") || { warn "$nd: cannot list instances in $r"; return 1; }
+  [ -n "$iid" ] && { echo "$iid"; return 0; }
   local vpc sg ami sub out
-  vpc=$(aws ec2 describe-vpcs --region "$r" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
+  vpc=$(retry aws ec2 describe-vpcs --region "$r" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
   [ "$vpc" != None ] || { warn "$r has no default VPC"; return 1; }
-  sg=$(aws ec2 describe-security-groups --region "$r" --filters Name=group-name,Values="$n" Name=vpc-id,Values="$vpc" --query 'SecurityGroups[0].GroupId' --output text)
+  sg=$(retry aws ec2 describe-security-groups --region "$r" --filters Name=group-name,Values="$n" Name=vpc-id,Values="$vpc" --query 'SecurityGroups[0].GroupId' --output text)
   if [ "$sg" = None ]; then
     # No inbound rules at all; instances are reached only through SSM.
-    sg=$(aws ec2 create-security-group --region "$r" --group-name "$n" --description "datum connect test, no inbound" --vpc-id "$vpc" \
+    sg=$(retry aws ec2 create-security-group --region "$r" --group-name "$n" --description "datum connect test, no inbound" --vpc-id "$vpc" \
       --tag-specifications "ResourceType=security-group,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" --query GroupId --output text)
   fi
-  ami=$(aws ssm get-parameter --region "$r" --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
+  ami=$(retry aws ssm get-parameter --region "$r" --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
   sleep 12 # IAM propagation for the new instance profile
-  for sub in $(aws ec2 describe-subnets --region "$r" --filters Name=vpc-id,Values="$vpc" Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text); do
-    out=$(aws ec2 run-instances --region "$r" --image-id "$ami" --instance-type "$INSTANCE_TYPE" --subnet-id "$sub" \
+  for sub in $(retry aws ec2 describe-subnets --region "$r" --filters Name=vpc-id,Values="$vpc" Name=default-for-az,Values=true --query 'Subnets[].SubnetId' --output text); do
+    out=$(retry aws ec2 run-instances --region "$r" --image-id "$ami" --instance-type "$INSTANCE_TYPE" --subnet-id "$sub" \
+      --client-token "$(printf '%s' "$n-$RUN_ID-$tok-$sub" | sha1sum | cut -c1-32)" \
       --security-group-ids "$sg" --iam-instance-profile Name="$n" \
       --metadata-options HttpTokens=required,HttpPutResponseHopLimit=1 \
       --tag-specifications "ResourceType=instance,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET},{Key=Name,Value=$n}]" "ResourceType=volume,Tags=[{Key=project,Value=$TAG},{Key=fleet,Value=$FLEET}]" \
@@ -234,25 +257,65 @@ onbox() { # node iid: install, patch, enrol, join
   local rc=$?; rm -f "$f"; return $rc
 }
 
-one_node() {
-  local nd=$1 iid
-  sa_for "$nd" || return 1
-  iid=$(aws_for "$nd") || return 1
-  say "$nd: instance $iid; installing and joining"
-  onbox "$nd" "$iid"
+one_node() { # returns 0 ok, 1 failed, 3 stuck Datum name (the caller replaces the node)
+  local nd=$1 iid pass rc r; r=$(node_region "$nd")
+  sa_for "$nd"; rc=$?; [ "$rc" = 0 ] || return "$rc"
+  for pass in 1 2 3; do
+    iid=$(aws_for "$nd" "$pass") || return 1
+    say "$nd: instance $iid; installing and joining (pass $pass)"
+    onbox "$nd" "$iid"; rc=$?
+    if [ "$rc" = 0 ]; then [ "$pass" = 1 ] || say "$nd: recovered on pass $pass"; return 0; fi
+    if [ "$rc" = 4 ]; then
+      warn "$nd: $iid never registered with SSM; replacing the instance"
+      aws ec2 terminate-instances --region "$r" --instance-ids "$iid" >/dev/null 2>&1
+      aws ec2 wait instance-terminated --region "$r" --instance-ids "$iid" 2>&1
+    else
+      warn "$nd: pass $pass failed (rc $rc)"
+    fi
+    [ "$pass" = 3 ] || { warn "$nd: retrying in 30 s"; sleep 30; }
+  done
+  return 1
 }
 
-for nd in $(nodes); do
-  throttle
-  say "$nd: starting"
-  ( one_node "$nd" >"$STATE_DIR/logs/$nd.log" 2>&1; echo $? >"$STATE_DIR/logs/$nd.rc" ) &
-done
-wait
+node_rc() { cat "$STATE_DIR/logs/$1.rc" 2>/dev/null || echo 1; }
+run_wave() { # nodes...: run one_node for each, in parallel
+  local nd
+  for nd; do
+    rm -f "$STATE_DIR/logs/$nd.rc"
+    throttle
+    say "$nd: starting"
+    ( one_node "$nd" >"$STATE_DIR/logs/$nd.log" 2>&1; echo $? >"$STATE_DIR/logs/$nd.rc" ) &
+  done
+  wait
+}
+
+run_wave $(nodes)
+
+# A node whose ServiceAccount name is stuck cannot be fixed by retrying. Retire the name (bad-names keeps
+# it from being reused) and run a replacement under the next free index in the same region.
+replaced=() stuck=()
+for nd in $(nodes); do [ "$(node_rc "$nd")" = 3 ] && stuck+=("$nd"); done
+if [ ${#stuck[@]} -gt 0 ]; then
+  fresh=()
+  for nd in "${stuck[@]}"; do
+    r=$(node_region "$nd"); mark_bad "$nd"
+    warn "$nd: its Datum service account is stuck; retiring the name and replacing the node"
+    { aws_down "$nd"; datum_down "$nd"; } >"$STATE_DIR/logs/down-$nd.log" 2>&1
+    repl=$r-$(next_index "$r")
+    { grep -vxF -- "$nd" "$nodes_file"; echo "$repl"; } >"$nodes_file.new"; mv "$nodes_file.new" "$nodes_file"
+    replaced+=("$nd -> $repl"); fresh+=("$repl")
+  done
+  run_wave "${fresh[@]}"
+fi
+
 fail=0
 for nd in $(nodes); do
-  rc=$(cat "$STATE_DIR/logs/$nd.rc" 2>/dev/null || echo 1)
-  if [ "$rc" = 0 ]; then say "$nd: ok"; else warn "$nd: FAILED (see $STATE_DIR/logs/$nd.log)"; fail=1; fi
+  if [ "$(node_rc "$nd")" = 0 ]; then
+    if grep -qE 'retrying|recovered|replacing' "$STATE_DIR/logs/$nd.log" 2>/dev/null; then say "$nd: ok, after recovering from a transient failure (see $STATE_DIR/logs/$nd.log)"; else say "$nd: ok"; fi
+  else warn "$nd: FAILED (see $STATE_DIR/logs/$nd.log)"; fail=1; fi
 done
+for x in ${replaced[@]+"${replaced[@]}"}; do say "replaced $x; the old name stays in $STATE_DIR/bad-names"; done
+[ "$fail" = 0 ] || warn "to retry the failed nodes: ${REGIONS:+REGIONS=\"$REGIONS\" }FLEET=$FLEET ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/setup"
 
 # ---- 4. netcheck + member list on every instance ---------------------------------------------
 say "installing netcheck"

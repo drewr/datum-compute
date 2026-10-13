@@ -181,6 +181,23 @@ profile, role and SSM key; and in Datum, each connector and network binding, pol
 service account key and service account, then the gateway and network. `--purge` also deletes the
 shared permissions boundary policy. The original network and gateway in the project are not touched.
 
+## Failures and retries
+
+`bin/setup` recovers from transient failures by itself and says so in its summary.
+
+- **Throttling, 5xx, timeouts, resets** on `aws` or `datumctl` calls are retried up to 4 times with
+  backoff (`retry` in `lib/common.sh`). Permanent errors (AccessDenied, quota, NotFound) are not retried.
+  `run-instances` carries a client token, so a retried launch cannot start a second instance.
+- **An instance that never registers with SSM** is terminated and relaunched once.
+- **A flaky install or join** on the instance is re-run, up to 3 passes with 30 s between.
+- **A stuck service account name** (a Datum ServiceAccount whose status never fills in, even after a
+  recreate) cannot be fixed by retrying. The name goes into `state/<fleet>/bad-names`, the node is torn
+  down, and a replacement starts under the next free index in that region (`us-west-2-0` becomes
+  `us-west-2-1`). `bad-names` is never reused and survives `bin/teardown`, because the name stays stuck
+  in Datum.
+- Anything still failing is listed as `FAILED` with its log, and the output ends with the command that
+  retries just those nodes.
+
 ## Things to know
 
 - **Gateway quota.** The staging project allows only a few ConnectGateways (3). A gateway's quota
