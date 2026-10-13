@@ -44,8 +44,8 @@ preflight() {
   }
   set_fleet
   local who; who=$(datumctl whoami 2>/dev/null) || die "datumctl is not logged in"
-  ORG=${ORG:-$(sed -n 's/^Organization:.*(\(org-[^)]*\)).*/\1/p' <<<"$who")}
-  PROJECT=${PROJECT:-$(sed -n 's/^Project:.*(\(project-[^)]*\)).*/\1/p' <<<"$who")}
+  ORG=${ORG:-$(sed -n 's/^Context:[[:space:]]*\(org-[^/[:space:]]*\)\/.*/\1/p' <<<"$who")}
+  PROJECT=${PROJECT:-$(sed -n 's/^Context:[[:space:]]*org-[^/]*\/\(project-[^[:space:]]*\).*/\1/p' <<<"$who")}
   [ -n "$ORG" ] && [ -n "$PROJECT" ] || die "datumctl has no org/project context (datumctl ctx use ORG/PROJECT, or set ORG and PROJECT)"
   PROJECT_UID=$(datumctl get projects "$PROJECT" --organization "$ORG" -o jsonpath='{.metadata.uid}' 2>/dev/null) || true
   [ -n "$PROJECT_UID" ] || die "cannot read project $PROJECT in $ORG"
