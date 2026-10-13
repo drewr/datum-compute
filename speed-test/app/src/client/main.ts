@@ -244,8 +244,8 @@ window.addEventListener("resize", () => {
 
 interface Meta {
   location: string;
-  instance: string;
-  client: { ip: string; family: string };
+  instance: string | null;
+  client: { ip: string; family: string; network: { asn: number; org: string } | null };
 }
 
 const mapEl = $("#map");
@@ -306,11 +306,25 @@ async function loadMeta(): Promise<void> {
     server = loc ?? null;
     $("#d-family").textContent = meta.client.family;
     $("#d-location").textContent = loc ? `${loc.city} (${meta.location})` : meta.location || "Unknown";
-    $("#d-instance").textContent = meta.instance;
+    $("#d-instance").textContent = meta.instance ?? "";
+    $("#d-instance-row").hidden = !meta.instance;
+    // "T-Mobile USA, Inc. (AS21928)", the AS number linked like Cloudflare's.
+    const net = meta.client.network;
+    const netEl = $("#d-network");
+    netEl.textContent = net ? `${net.org} (` : "";
+    if (net) {
+      const a = document.createElement("a");
+      a.href = `https://bgp.he.net/AS${net.asn}`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = `AS${net.asn}`;
+      netEl.append(a, ")");
+    }
+    $("#d-network-row").hidden = !net;
     $("#d-ip").textContent = meta.client.ip;
   } catch (err) {
     console.error("meta:", err);
-    for (const id of ["d-family", "d-location", "d-instance", "d-ip"]) $(`#${id}`).textContent = "Unavailable";
+    for (const id of ["d-family", "d-location", "d-instance", "d-network", "d-ip"]) $(`#${id}`).textContent = "Unavailable";
   }
   drawMap();
 }

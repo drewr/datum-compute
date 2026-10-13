@@ -7,6 +7,8 @@ import http from "node:http";
 import os from "node:os";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import mmdb from "mmdb-lib";
+import type { AsnResponse } from "mmdb-lib/lib/reader/response.js";
 import { PAGE } from "./page.js";
 
 const port = Number(process.env.PORT ?? 8080);
@@ -24,6 +26,32 @@ const MAX_BYTES = 100e6;
 const CHUNK = randomBytes(1 << 20);
 
 const CLIENT_JS = readFileSync(new URL("./client.js", import.meta.url));
+
+// The instance's hostname, for the page's "Served by". Unikernel instances
+// have none (os.hostname() is "(none)"), so the page leaves the row out.
+const hostname = os.hostname();
+const instance = hostname && hostname !== "(none)" && hostname !== "localhost" ? hostname : null;
+
+// DB-IP's IP to ASN Lite database (CC BY 4.0), which default.nix installs next
+// to dist/. It names the client's network like Cloudflare's "Your network",
+// and the lookup stays on this instance. ASN_DB points elsewhere for local
+// runs; without the file the page just leaves the row out.
+const asnPath = process.env.ASN_DB ?? new URL("../asn.mmdb", import.meta.url).pathname;
+let asnDb: mmdb.Reader<AsnResponse> | null = null;
+try {
+  asnDb = new mmdb.Reader<AsnResponse>(readFileSync(asnPath));
+} catch (err) {
+  console.warn(`no ASN database at ${asnPath}: ${(err as Error).message}`);
+}
+
+function network(ip: string): { asn: number; org: string } | null {
+  try {
+    const r = asnDb?.get(ip);
+    return r?.autonomous_system_number ? { asn: r.autonomous_system_number, org: r.autonomous_system_organization ?? "" } : null;
+  } catch {
+    return null; // not an address the database understands
+  }
+}
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -84,18 +112,23 @@ async function up(req: http.IncomingMessage, res: http.ServerResponse, start: bi
 }
 
 // The client's address as this instance sees it, cut to /24 (IPv4) or /48
-// (IPv6) like Cloudflare's page does. Behind Datum's HTTP proxy the address
-// arrives in X-Forwarded-For.
-function clientAddress(req: http.IncomingMessage): { ip: string; family: "IPv4" | "IPv6" } {
+// (IPv6) like Cloudflare's page does, and the network it belongs to, looked
+// up from the full address. Behind Datum's HTTP proxy the address arrives in
+// X-Forwarded-For; a client can set that header too, so this is only display.
+function clientAddress(req: http.IncomingMessage): {
+  ip: string;
+  family: "IPv4" | "IPv6";
+  network: { asn: number; org: string } | null;
+} {
   const forwarded = req.headers["x-forwarded-for"];
   const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
   let ip = first || req.socket.remoteAddress || "";
   if (ip.startsWith("::ffff:") && ip.includes(".")) ip = ip.slice(7);
   if (ip.includes(".")) {
-    return { ip: ip.split(".").slice(0, 3).concat("0").join(".") + "/24", family: "IPv4" };
+    return { ip: ip.split(".").slice(0, 3).concat("0").join(".") + "/24", family: "IPv4", network: network(ip) };
   }
   const groups = expandIPv6(ip).slice(0, 3).map((g) => g.replace(/^0+(?=.)/, ""));
-  return { ip: `${groups.join(":")}::/48`, family: "IPv6" };
+  return { ip: `${groups.join(":")}::/48`, family: "IPv6", network: network(ip) };
 }
 
 function expandIPv6(ip: string): string[] {
@@ -119,7 +152,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     return;
   }
   if (req.method === "GET" && url.pathname === "/__meta") {
-    return send(res, 200, { location, instance: os.hostname(), client: clientAddress(req) });
+    return send(res, 200, { location, instance, client: clientAddress(req) });
   }
   if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
 

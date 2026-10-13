@@ -19,9 +19,16 @@ let
     PRETTY_NAME="NixOS ${lib.trivial.release} (${lib.trivial.codeName})"
   '';
 
+  # DB-IP's IP to ASN Lite (CC BY 4.0; the page credits it), for the page's
+  # "Your network". Released monthly; bump the month and hash now and then.
+  asnDb = pkgs.fetchurl {
+    url = "https://download.db-ip.com/free/dbip-asn-lite-2026-10.mmdb.gz";
+    hash = "sha256-bN3gK6qMG9YZq4TC5QXs2R1FKItah/qt8bfEFSWhepQ=";
+  };
+
   # Compiles the server with tsc and bundles the browser code (Cloudflare's
-  # measurement engine, d3-geo, the world map) with esbuild. Every npm
-  # package is a build-time dependency, so only dist/ ships.
+  # measurement engine, d3-geo, the world map) with esbuild. The only
+  # runtime package is mmdb-lib, which reads the ASN database.
   speedTest = pkgs.buildNpmPackage {
     pname = "speed-test";
     version = "1.0.0";
@@ -36,12 +43,14 @@ let
         ./app/src
       ];
     };
-    npmDepsHash = "sha256-hHBKxNZgRIS+0Qbidcpzryh9vXk81Hsz9XAKbu9oyPY=";
+    npmDepsHash = "sha256-WNA6MR1Hd5/flNt2xNngtmvHA4BocLZ4lJxNmNc+yCY=";
     nodejs = pkgs.nodejs_22; # npm, tsc and esbuild at build time; nodejs-slim at runtime
     installPhase = ''
       runHook preInstall
+      npm prune --omit=dev
       mkdir -p $out/lib/speed-test
-      cp -r dist package.json $out/lib/speed-test/
+      cp -r dist node_modules package.json $out/lib/speed-test/
+      gunzip -c ${asnDb} > $out/lib/speed-test/asn.mmdb
       runHook postInstall
     '';
   };

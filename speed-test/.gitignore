@@ -3,3 +3,4 @@ result*
 # Node build output
 app/node_modules/
 app/dist/
+app/asn.mmdb

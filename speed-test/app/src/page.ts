@@ -29,6 +29,7 @@ const I = {
   network: "M160,40a32,32,0,1,0-40,31v17H72a24,24,0,0,0-24,24v16.6a32,32,0,1,0,16,0V112a8,8,0,0,1,8-8h48v24.6a32,32,0,1,0,16,0V104h48a8,8,0,0,1,8,8v16.6a32,32,0,1,0,16,0V112a24,24,0,0,0-24-24H136V71A32.06,32.06,0,0,0,160,40ZM112,40a16,16,0,1,1,16,16A16,16,0,0,1,112,40ZM72,160a16,16,0,1,1-16-16A16,16,0,0,1,72,160Zm72,0a16,16,0,1,1-16-16A16,16,0,0,1,144,160Zm72,0a16,16,0,1,1-16-16A16,16,0,0,1,216,160Z",
   pin: "M128,64a40,40,0,1,0,40,40A40,40,0,0,0,128,64Zm0,64a24,24,0,1,1,24-24A24,24,0,0,1,128,128Zm0-112a88.1,88.1,0,0,0-88,88c0,31.4,14.51,64.68,42,96.25a254.19,254.19,0,0,0,41.45,38.3,8,8,0,0,0,9.18,0A254.19,254.19,0,0,0,174,200.25c27.45-31.57,42-64.85,42-96.25A88.1,88.1,0,0,0,128,16Zm0,206c-16.53-13-72-60.75-72-118a72,72,0,0,1,144,0C200,161.23,144.53,209,128,222Z",
   server: "M208,136H48a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,64H48V152H208v48Zm0-160H48A16,16,0,0,0,32,56v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V56A16,16,0,0,0,208,40Zm0,64H48V56H208v48ZM192,80a12,12,0,1,1-12-12A12,12,0,0,1,192,80Zm0,96a12,12,0,1,1-12-12A12,12,0,0,1,192,176Z",
+  share: "M176,160a39.89,39.89,0,0,0-28.62,12.09l-46.1-29.63a39.8,39.8,0,0,0,0-28.92l46.1-29.63a40,40,0,1,0-8.66-13.45l-46.1,29.63a40,40,0,1,0,0,55.82l46.1,29.63A40,40,0,1,0,176,160Zm0-128a24,24,0,1,1-24,24A24,24,0,0,1,176,32ZM64,152a24,24,0,1,1,24-24A24,24,0,0,1,64,152Zm112,72a24,24,0,1,1,24-24A24,24,0,0,1,176,224Z",
   card: "M224,48H32A16,16,0,0,0,16,64V192a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V64A16,16,0,0,0,224,48Zm0,16V88H32V64Zm0,128H32V104H224v88Z",
 };
 
@@ -236,6 +237,8 @@ ${FONTS}
   .details .k { white-space: nowrap; }
   .details .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .details .v.link { color: var(--link); }
+  .details .v a { text-decoration: none; }
+  .details .v a:hover { text-decoration: underline; }
 
   /* footer: border-t py-3 lg:py-4 mt-1.5 lg:mt-0, links px-3 py-1 with dividers */
   .page-footer { border-top: 1px solid var(--line); padding: 12px 0; margin-top: 6px; color: var(--text-strong); }
@@ -344,12 +347,13 @@ ${FONTS}
         <div class="map-box">
           <div class="map" id="map">
             <div class="map-zoom"><button type="button" id="zoom-in" aria-label="Zoom in">${icon(I.plus, "", 16)}</button><button type="button" id="zoom-out" aria-label="Zoom out">${icon(I.minus, "", 16)}</button></div>
-            <div class="map-credit"><a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a></div>
+            <div class="map-credit"><a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a> · <a href="https://db-ip.com" target="_blank" rel="noopener">IP data by DB-IP</a></div>
           </div>
           <ul class="details">
             <li>${icon(I.network, "", 14)}<span class="k">Connected via</span> <span class="v" id="d-family">…</span></li>
             <li>${icon(I.pin, "", 14)}<span class="k">Server location:</span> <span class="v" id="d-location">…</span></li>
-            <li>${icon(I.server, "", 14)}<span class="k">Served by:</span> <span class="v" id="d-instance">…</span></li>
+            <li id="d-instance-row">${icon(I.server, "", 14)}<span class="k">Served by:</span> <span class="v" id="d-instance">…</span></li>
+            <li id="d-network-row">${icon(I.share, "", 14)}<span class="k">Your network:</span> <span class="v" id="d-network">…</span></li>
             <li>${icon(I.card, "", 14)}<span class="k">Your IP address:</span> <span class="v link" id="d-ip">…</span></li>
           </ul>
         </div>
@@ -383,6 +387,7 @@ ${FONTS}
       <ul>
         <li>sends you random data, and receives and discards the data you upload;</li>
         <li>reports your IP address back to this page, cut to /24 (IPv4) or /48 (IPv6) for display;</li>
+        <li>looks up which network (ASN) your address belongs to, in a copy of DB-IP's database kept on the instance, so your address isn't sent to anyone else;</li>
         <li>keeps no log of your requests or results.</li>
       </ul>
     </div>
