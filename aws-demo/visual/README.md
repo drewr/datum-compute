@@ -60,8 +60,8 @@ starts — and the specific numbers on screen are the model's. The page says
 ## More
 
 - [docs/talk-track.md](docs/talk-track.md) — what to say while showing it
-- [docs/running.md](docs/running.md) — building from source, settings, the
-  walkthrough's URL parameters, and how it works
+- [docs/running.md](docs/running.md) — building from source, settings and how
+  it works
 - [docs/publishing.md](docs/publishing.md) — the published images
 
 ## Licence

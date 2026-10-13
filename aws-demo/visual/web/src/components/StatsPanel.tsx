@@ -236,7 +236,7 @@ function Stat({
   value: number | string;
   unit?: string;
   accent?: string;
-  /** Names the tile so a walkthrough card can point at it, or keep off it. */
+  /** Names the tile in the markup (data-tour). */
   tour?: string;
   compact?: boolean;
   animate?: boolean;

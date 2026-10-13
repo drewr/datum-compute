@@ -121,40 +121,7 @@ why, and the current state is on `/api/mesh` under `driver`:
 curl -s https://<hostname>/api/mesh | jq .driver
 ```
 
-## The guided walkthrough
-
-The page explains itself in two phases. The **intro** is four hand-written
-cards, each naming something Datum does and then pointing at the thing on
-screen that proves it; it has Back and Next, because nothing is moving while it
-runs. **Live narration** takes over afterwards and raises a card each time the
-workload does something — a location scales, an Instance joins the network, an
-Instance drains. Those cards have no navigation, because a scale-up cannot be
-rewound.
-
-![The intro, inside a location](story-1.png)
-
-Append `?story=` to the URL to change that.
-
-| `?story=` | What happens |
-| --- | --- |
-| *(omitted)* | The intro plays once on arrival, then live narration takes over. |
-| `on` | The same as omitting it. |
-| `loop` | The intro plays on repeat and never hands over. Use this for a booth or a kiosk. |
-| `off` | No intro; live narration still runs. |
-| `quiet` | Nothing at all. Use this for screenshots. |
-
-Steering the map — a zoom, a pan, a hover — hands the camera to the visitor and
-pauses the intro's clock, but keeps the words. The camera comes back, and a
-paused intro carries on, once the map has been left alone for twenty seconds,
-so a booth screen recovers from a passer-by. Only the card's close button ends
-the walkthrough, and "Replay the tour" under the map starts it again. With
-`prefers-reduced-motion: reduce`, the camera cuts between framings instead of
-gliding and the cards fade rather than travel.
-
-Take screenshots with `?story=quiet`, so neither the intro nor a narration card
-lands under them.
-
-![Live narration, an Instance joining](story-live.png)
+## Layout
 
 The page is built for phones as well as projectors. Which layout appears is
 decided by the shape of the space the map would get rather than the window's
@@ -195,9 +162,3 @@ The Go module has no dependencies outside the standard library and builds with
 `CGO_ENABLED=0` into one static binary. The page is React 19, TypeScript,
 Tailwind v4 and `@datum-cloud/datum-ui`, built by Vite. The dotted world map
 and its projection come from the Datum Cloud portal's edge overview.
-
-`web/src/narration.ts` reads nothing but the activity event stream that the
-server builds by diffing successive observations of the fleet — the same code
-path for a simulated fleet and a real one, so a live workload needs nothing
-added there. The intro in `web/src/intro.ts` is hand-written explanation and
-always will be, which is why the two live in separate modules.

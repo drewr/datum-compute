@@ -1,7 +1,6 @@
 # The 60-second talk track
 
-The walkthrough on the page delivers a shorter version of this on its own. This
-is the one to say out loud.
+This is the one to say out loud.
 
 > This is one application, deployed once, running in every Datum location. Each
 > glowing pin is a location, and the badge on it is how many instances of the
@@ -36,10 +35,6 @@ is the one to say out loud.
 >
 > That's the promise: write your app once, run it everywhere, and let it talk to
 > itself privately and fast.
-
-Set the page to `?story=loop` if it is going to sit unattended on a screen, and
-`?story=off` if you would rather narrate it yourself without cards appearing
-over the map.
 
 ![A location scaling out](screenshot-scaling.png)
 ![A location zoomed in, showing its Instances](screenshot-zoom.png)

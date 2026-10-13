@@ -1,16 +1,12 @@
 import { ThemedLogo } from '@datum-cloud/datum-ui/logo/themed';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { InstanceCard } from './components/InstanceCard';
 import { MeshMap } from './components/MeshMap';
 import { Narrative } from './components/Narrative';
-import { PlayStory, StoryCard, walkthroughFits } from './components/StoryCard';
 import { StatsPanel } from './components/StatsPanel';
-import { FLIGHT_MS, fleetAspect } from './camera';
-import { useIntro } from './intro';
+import { fleetAspect } from './camera';
 import { buildIntraLinks, buildLinks, buildRegions } from './mesh';
-import { useNarration } from './narration';
-import { type Stage, storySettings, useStoryInterrupt } from './story';
 import { useFeed } from './useFeed';
 import { useMesh } from './useMesh';
 import { MIN_MAP_ASPECT, type Viewport, usePrefersReducedMotion, useViewport } from './viewport';
@@ -31,103 +27,15 @@ export function App() {
 
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  // Zooming or panning hands the screen to the visitor; the tour waits.
+  // Zooming or panning hands the screen to the visitor; the spotlight waits.
   const [steering, setSteering] = useState(false);
-  const [stage, setStage] = useState<Stage | null>(null);
-
-  // The walkthrough runs in two phases and only one of them is ever talking:
-  // the intro explains the picture, then narration takes over and reports what
-  // the workload does. Both supersede the spotlight tour while they are up.
-  const settings = useMemo(() => storySettings(window.location.search), []);
-  const inputs = useMemo(() => ({ view, regions, links, intraLinks }), [view, regions, links, intraLinks]);
-  // Null until the map has drawn and can say whether it has anywhere to put a
-  // card. The walkthrough does not open itself on a screen where every spot is
-  // on top of the fleet — someone on a phone turned sideways has almost always
-  // turned it by accident, and the map and the numbers are the better thing to
-  // hand them. A booth screen asked for the tour outright, so it gets it.
-  const [cardFloats, setCardFloats] = useState<boolean | null>(null);
-  const autoplay = !settings.intro
-    ? false
-    : settings.loop
-      ? true
-      : cardFloats === null
-        ? null
-        : walkthroughFits(cardFloats, vp.stacked, mapSize.height);
-  const intro = useIntro(inputs, { autoplay, loop: settings.loop, reducedMotion });
-  const narration = useNarration(inputs, { active: settings.narrate && intro.finished && !intro.playing });
-  const showing = intro.playing ? intro : narration.showing;
-
-  // Steering hands the camera over until the map has been left alone long
-  // enough to find its own way back to the fleet.
-  const [handedOver, setHandedOver] = useState(false);
-  const handOver = useCallback(() => {
-    setHandedOver(true);
-    intro.pause();
-  }, [intro.pause]); // eslint-disable-line react-hooks/exhaustive-deps
-  useStoryInterrupt(!!showing, handOver);
-  useEffect(() => {
-    if (!steering) setHandedOver(false);
-  }, [steering]);
-
-  // Hovering a pin is the visitor taking over as much as a drag is, but a
-  // mouse drifting across the page is not.
-  const hover = useCallback(
-    (location: string | null) => {
-      if (location) handOver();
-      setHovered(location);
-    },
-    [handOver]
-  );
 
   const tour = useTour(
     regions.map((r) => r.location),
     regions.find((r) => r.isSelf)?.location ?? null,
-    !!(hovered || selected) || reducedMotion || steering || !!showing
+    !!(hovered || selected) || reducedMotion || steering
   );
-  const focus = hovered ?? selected ?? (showing ? showing.focus : tour);
-  // A card about a pin lights that pin; one about the whole fleet leaves the
-  // map alone, because then the map is the subject. Undefined means no
-  // clearing at all, which is not the same as one with nothing lit inside it.
-  const lit = !showing?.card
-    ? undefined
-    : showing.target.at === 'location'
-      ? showing.target.location
-      : showing.target.at === 'panel'
-        ? null
-        : undefined;
-  // Held by the location rather than rebuilt: the walkthrough makes a new
-  // target object every render, and the map should not repaint for that.
-  const spotlight = useMemo(() => (lit === undefined ? null : { location: lit }), [lit]);
-  // A card whose subject the camera is still travelling to waits for it to
-  // arrive; one that only changes its words appears at once.
-  const shotKey = showing?.shot
-    ? showing.shot.at === 'fleet'
-      ? 'fleet'
-      : `${showing.shot.location}@${showing.shot.closeness}`
-    : 'none';
-  // The walkthrough rebuilds its shot on every render. Held by its key, an
-  // unchanged shot stays the same object, and the map beneath it can sit out
-  // the renders a passing feed line causes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const shot = useMemo(() => (handedOver ? null : (showing?.shot ?? null)), [handedOver, shotKey]);
-  const [travelling, setTravelling] = useState(false);
-  useEffect(() => {
-    setTravelling(true);
-    // A beat past the flight, so the card settles after the map rather than
-    // with it still easing to a stop.
-    const id = window.setTimeout(() => setTravelling(false), FLIGHT_MS + 200);
-    return () => window.clearTimeout(id);
-  }, [shotKey]);
-  const replay = useCallback(() => {
-    intro.start();
-    narration.restart();
-  }, [intro.start, narration.restart]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Closing a card means "leave me alone", whichever half put it there, so it
-  // silences both rather than handing the visitor straight to the other one.
-  const dismiss = useCallback(() => {
-    intro.stop();
-    narration.stop();
-  }, [intro.stop, narration.stop]); // eslint-disable-line react-hooks/exhaustive-deps
+  const focus = hovered ?? selected ?? tour;
   const selectedRegion = regions.find((r) => r.location === selected) ?? null;
   useDismissOnOutside(!!selected, () => setSelected(null));
 
@@ -242,7 +150,7 @@ export function App() {
               // a close-up cannot drift across the numbers.
               vp.stacked ? 'w-full' : 'min-h-0 flex-1'
             }`}
-            style={vp.stacked ? { height: stackedMapHeight(vp, mapAspect, !!showing?.card) } : undefined}
+            style={vp.stacked ? { height: stackedMapHeight(vp, mapAspect) } : undefined}
           >
             {mapSize.width > 0 && (
               <MeshMap
@@ -257,14 +165,9 @@ export function App() {
                 flashing={feed.flashing}
                 selected={selected}
                 receivedAt={receivedAt}
-                onHover={vp.compact ? noop : hover}
+                onHover={vp.compact ? noop : setHovered}
                 onSelect={setSelected}
                 onEngage={setSteering}
-                onRoom={setCardFloats}
-                shot={shot}
-                cut={reducedMotion}
-                spotlight={spotlight}
-                onStage={showing?.card ? setStage : undefined}
               />
             )}
             <AnimatePresence>
@@ -280,76 +183,20 @@ export function App() {
               )}
             </AnimatePresence>
           </div>
-          {/* The walkthrough narrates the map, so it lives in the map's own
-              section: floating inside the map where there is room for it, and
-              otherwise in flow directly under it. Beside the panel the map is
-              the flexible part of this column, so a card in flow takes its
-              room from the map rather than from the numbers. */}
-          <AnimatePresence>
-            {showing?.card && (
-              <StoryCard
-                key="story-card"
-                card={showing.card}
-                beat={showing.beat}
-                target={showing.target}
-                stage={stage}
-                nav={
-                  intro.playing
-                    ? {
-                        index: intro.index,
-                        count: intro.count,
-                        paused: intro.paused,
-                        startedAt: intro.startedAt,
-                        endsAt: intro.endsAt,
-                        pausedAt: intro.pausedAt,
-                        back: intro.back,
-                        next: intro.next,
-                        resume: intro.resume,
-                      }
-                    : null
-                }
-                since={narration.since}
-                travelling={travelling}
-                column={vp.stacked ? stackedColumn(vp) : ''}
-                compact={vp.compact}
-                reducedMotion={reducedMotion}
-                onExit={dismiss}
-              />
-            )}
-          </AnimatePresence>
-          {/* Stacked, the strip is dead space while the walkthrough holds the
-              floor; beside the panel it keeps its place so the map does not
-              resize under a camera that is mid-flight. */}
           <div
-            className={`${vp.stacked && showing && intro.playing ? 'hidden' : ''} ${
+            className={
               vp.stacked ? `${stackedColumn(vp)} pt-1` : `border-t border-line-7 ${vp.compact ? 'pt-4' : 'pt-6'}`
-            }`}
+            }
           >
-            {/* One voice at a time: the rotating line stands down for as long
-                as the walkthrough has the floor. */}
             <div className={`flex items-center ${vp.compact ? 'gap-3' : 'gap-6'}`}>
               <div className={`min-w-0 flex-1 ${vp.compact ? 'min-h-[38px]' : 'min-h-[56px]'}`}>
-                {!showing && (
-                  <Narrative
-                    staticDiscovery={view?.discovery === 'static'}
-                    compact={vp.compact}
-                    short={vp.mode === 'phone' || vp.mode === 'landscape'}
-                    paused={reducedMotion}
-                  />
-                )}
-              </div>
-              {/* Nothing is offered on a page that asked for nothing. */}
-              {!intro.playing && (settings.intro || settings.narrate) && (
-                <PlayStory
-                  onClick={replay}
-                  played={intro.played}
+                <Narrative
+                  staticDiscovery={view?.discovery === 'static'}
                   compact={vp.compact}
-                  // Where the walkthrough never opened by itself this is the
-                  // only way in, so it keeps its words even on a screen that
-                  // would otherwise be given the play mark alone.
-                  iconOnly={(vp.mode === 'phone' || vp.mode === 'landscape') && (intro.played || !settings.intro)}
+                  short={vp.mode === 'phone' || vp.mode === 'landscape'}
+                  paused={reducedMotion}
                 />
-              )}
+              </div>
             </div>
           </div>
           {/* Softens the seam where cards scroll under the pinned map. */}
@@ -443,15 +290,9 @@ function stackedColumn(vp: Viewport): string {
  * A window wide enough for two columns of content gives the map a little less
  * of itself. The map is that much wider there, so it loses nothing, and what
  * it gives up goes to the two feeds under it.
- *
- * While the walkthrough is talking the map takes more of the window, so the
- * card has somewhere inside it to stand. That is the guided minute; the
- * numbers can wait for it. A phone is too short to give anything up, and the
- * card sits under the map there instead.
  */
-function stackedMapHeight(vp: Viewport, aspect: number, narrating = false): number {
-  const resting = vp.columns === 2 ? 0.42 : vp.mode === 'tablet' ? 0.46 : 0.44;
-  const share = narrating && vp.mode !== 'phone' ? Math.max(resting, 0.56) : resting;
+function stackedMapHeight(vp: Viewport, aspect: number): number {
+  const share = vp.columns === 2 ? 0.42 : vp.mode === 'tablet' ? 0.46 : 0.44;
   return Math.round(Math.max(200, Math.min(vp.width / aspect, vp.height * share)));
 }
 

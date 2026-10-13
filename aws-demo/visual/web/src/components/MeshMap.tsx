@@ -1,12 +1,10 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { type Camera, ZOOM_STEP, fitCamera, useMapCamera } from '../camera';
-import { type Box, COMPACT_SELF_CHIP, SELF_CHIP, type Side, type ToPx, arcLabelText, layoutLabels, pointOnArc } from '../labels';
+import { COMPACT_SELF_CHIP, SELF_CHIP, type Side, type ToPx, arcLabelText, layoutLabels, pointOnArc } from '../labels';
 import { MAP_HEIGHT, MAP_WIDTH, STATE_COLOR, arcPath, fanOffsets, formatMs } from '../mesh';
-import type { Stage, StoryShot } from '../story';
 import type { IntraLink, Link, Region, Replica } from '../types';
 import { InstanceCard } from './InstanceCard';
-import { cardFitsOnMap } from './StoryCard';
 
 const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 
@@ -46,24 +44,6 @@ interface Props {
   onSelect: (location: string | null) => void;
   /** Tells the page the visitor is steering, so the spotlight tour stands by. */
   onEngage?: (engaged: boolean) => void;
-  /** Where the walkthrough wants the camera; null leaves the visitor in charge. */
-  shot?: StoryShot | null;
-  /** The walkthrough cutting rather than flying, for reduced motion. */
-  cut?: boolean;
-  /**
-   * Dims the map around whatever the walkthrough is talking about. A location
-   * gets a clearing around its Instances; null dims the map evenly, for a card
-   * whose subject is off the map altogether.
-   */
-  spotlight?: { location: string | null } | null;
-  /**
-   * Reports whether a walkthrough card could float here clear of the fleet.
-   * Asked before the walkthrough opens itself, so it is reported whether or
-   * not a card is showing.
-   */
-  onRoom?: (roomy: boolean) => void;
-  /** Reports where things are, so a card over the map can avoid covering them. */
-  onStage?: (stage: Stage) => void;
 }
 
 function projector(cam: Camera, width: number): ToPx {
@@ -99,11 +79,6 @@ function MeshMapImpl({
   onHover,
   onSelect,
   onEngage,
-  shot = null,
-  cut = false,
-  spotlight = null,
-  onRoom,
-  onStage,
 }: Props) {
   const aspect = width / height;
   // Re-frame only when the set of places or the shape of the map changes,
@@ -111,9 +86,7 @@ function MeshMapImpl({
   const placesKey = regions.map((r) => r.location).join(',');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const fit = useMemo(() => fitCamera(regions, aspect, width, compact), [placesKey, aspect, width, compact]);
-  // While the story is driving, the idle reset stands down: a chapter can hold
-  // one location for longer than an abandoned page would be left alone.
-  const camera = useMapCamera(fit, width, height, shot ? 0 : IDLE_RESET_MS);
+  const camera = useMapCamera(fit, width, height, IDLE_RESET_MS);
   const { cam, target, engaged } = camera;
   const toPx = useCallback<ToPx>((x, y) => projector(cam, width)(x, y), [cam, width]);
   // Map units per screen pixel; keeps pins and strokes a constant size on
@@ -144,24 +117,6 @@ function MeshMapImpl({
   const labelOffset = (compact ? 14 : 18) + labelSpread + 18 * settledExpansion;
 
   useEffect(() => onEngage?.(engaged), [engaged, onEngage]);
-
-  // Story mode steers through the same controls a visitor uses, so there is
-  // one way into a framing rather than two that can disagree.
-  const regionsRef = useRef(regions);
-  regionsRef.current = regions;
-  const shotKey = shot ? (shot.at === 'fleet' ? 'fleet' : `${shot.location}@${shot.closeness}`) : null;
-  useEffect(() => {
-    if (!shotKey || !shot) return;
-    if (shot.at === 'fleet') {
-      camera.reset(!cut);
-      return;
-    }
-    const region = regionsRef.current.find((r) => r.location === shot.location);
-    if (region) camera.focusRegion(region, shot.closeness, !cut);
-    // The shot is identified by its key; rebuilding it every poll is not a cue
-    // to fly again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shotKey, cut, placesKey, camera.reset, camera.focusRegion]);
 
   const replicas = useMemo(
     () => layOutReplicas(regions, unit, radius, expansion),
@@ -207,81 +162,6 @@ function MeshMapImpl({
       ),
     [regions, labelledLinks, target, width, height, compact, focus, labelSpread, details]
   );
-
-  // What each pin and the fleet as a whole take up on the map, in the map's
-  // own pixels: rings and hit target whatever the zoom, plus the Instances
-  // fanned around them and the badge above them. Laid out against where the
-  // camera is heading, like the labels, so a card placed from this does not
-  // shuffle about while the map is still flying.
-  const drawn = useMemo(() => {
-    const at = projector(target, width);
-    const clearance = (compact ? 34 : 48) + labelSpread;
-    const crown = compact ? 14 : 20;
-    const around = ([x, y]: [number, number]): Box => ({
-      x0: x - clearance,
-      y0: y - clearance - crown,
-      x1: x + clearance,
-      y1: y + clearance,
-    });
-    const points = regions.map((r) => at(r.x, r.y));
-    const subjects: Record<string, Box> = {};
-    regions.forEach((r, i) => {
-      subjects[r.location] = around(points[i]);
-    });
-    const fleet: Box = points.length
-      ? {
-          x0: Math.min(...points.map((p) => p[0])) - clearance,
-          y0: Math.min(...points.map((p) => p[1])) - clearance - crown,
-          x1: Math.max(...points.map((p) => p[0])) + clearance,
-          y1: Math.max(...points.map((p) => p[1])) + clearance,
-        }
-      : { x0: 0, y0: 0, x1: width, y1: height };
-    return { subjects, fleet };
-  }, [regions, target, width, height, compact, labelSpread]);
-
-  // Whether a walkthrough card could float here clear of the fleet. The page
-  // asks before opening the walkthrough by itself. Nothing is said until there
-  // is a fleet: a map with no pins on it yet has no answer, and "no room" is
-  // not the same as "not yet".
-  const roomy = regions.length > 0 ? cardFitsOnMap(drawn.fleet, { width, height }, compact) : null;
-  useEffect(() => {
-    if (roomy !== null) onRoom?.(roomy);
-  }, [roomy, onRoom]);
-
-  useEffect(() => {
-    const el = camera.surface.current;
-    if (!onStage || !el) return;
-    const publish = () => {
-      const box = el.getBoundingClientRect();
-      const shift = (b: Box): Box => ({
-        x0: b.x0 + box.left,
-        y0: b.y0 + box.top,
-        x1: b.x1 + box.left,
-        y1: b.y1 + box.top,
-      });
-      const subjects: Record<string, Box> = {};
-      for (const [location, b] of Object.entries(drawn.subjects)) subjects[location] = shift(b);
-      onStage({
-        surface: { x0: box.left, y0: box.top, x1: box.right, y1: box.bottom },
-        reserved: layout.boxes.map(shift),
-        subjects,
-        fleet: shift(drawn.fleet),
-      });
-    };
-    publish();
-    // A stacked layout scrolls under a pinned map, so the surface moves.
-    window.addEventListener('scroll', publish, { passive: true, capture: true });
-    window.addEventListener('resize', publish);
-    return () => {
-      window.removeEventListener('scroll', publish, { capture: true });
-      window.removeEventListener('resize', publish);
-    };
-  }, [onStage, layout, drawn, camera.surface]);
-
-  // The clearing follows the camera as it flies, so the subject stays lit the
-  // whole way in rather than arriving already framed.
-  const lit = spotlight?.location ? regions.find((r) => r.location === spotlight.location) : null;
-  const clearing = lit ? toPx(lit.x, lit.y) : null;
 
   return (
     <div
@@ -492,27 +372,7 @@ function MeshMapImpl({
         </AnimatePresence>
       </div>
 
-      <AnimatePresence>
-        {spotlight && (
-          <motion.div
-            key="spotlight"
-            className="pointer-events-none absolute inset-0"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reducedMotion ? 0 : 0.7, ease: EASE_OUT }}
-            style={{
-              background: clearing
-                ? `radial-gradient(circle ${Math.round(Math.max(compact ? 110 : 150, radius * expansion + 110))}px at ${Math.round(clearing[0])}px ${Math.round(clearing[1])}px, rgb(var(--map-dim) / 0) 0%, rgb(var(--map-dim) / 0) 58%, rgb(var(--map-dim) / 0.58) 100%)`
-                : 'rgb(var(--map-dim) / 0.42)',
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* The way back to the whole fleet is the visitor's, not the story's:
-          offering it while the story is flying would read as their doing. */}
-      <ZoomControls camera={camera} compact={compact} steerable={!shot} />
+      <ZoomControls camera={camera} compact={compact} />
 
       {/* On a small screen the card is rendered below the map instead, where
           it does not cover the thing it describes. */}
@@ -971,12 +831,10 @@ function ArcLabel({ link, focus, at }: { link: Link; focus: string; at: [number,
 function ZoomControls({
   camera,
   compact,
-  steerable,
 }: {
   camera: ReturnType<typeof useMapCamera>;
   compact: boolean;
   /** False while something else is driving, which hides the way back. */
-  steerable: boolean;
 }) {
   const size = compact ? 'size-9' : 'size-11';
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
@@ -986,7 +844,7 @@ function ZoomControls({
   return (
     <div className={`absolute z-30 flex flex-col items-end gap-2 ${compact ? 'right-2.5 bottom-2.5' : 'right-4 bottom-4'}`}>
       <AnimatePresence>
-        {camera.engaged && steerable && (
+        {camera.engaged && (
           <motion.button
             type="button"
             initial={{ opacity: 0, y: 6 }}

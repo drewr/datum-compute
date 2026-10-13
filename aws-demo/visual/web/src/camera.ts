@@ -17,8 +17,7 @@ const FIT_PIXELS_PER_UNIT = 3.6;
 /**
  * How far in the visitor may zoom, as a multiple of the whole-fleet framing.
  * A multiple rather than a scale, because what counts is how much closer this
- * is than the view the page opens on, whatever screen it opened on. It has to
- * clear the walkthrough's close-up, which frames one location's Instances.
+ * is than the view the page opens on, whatever screen it opened on.
  */
 export const MAX_ZOOM = 10;
 /** However far in, never frame less of the world than this, in map units. */
