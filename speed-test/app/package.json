@@ -1,0 +1,25 @@
+{
+  "name": "speed-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc && tsc -p tsconfig.client.json && esbuild src/client/main.ts --bundle --format=esm --minify --target=es2020 --outfile=dist/client.js && cp node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs dist/",
+    "start": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@cloudflare/speedtest": "^1.14.1",
+    "@types/d3-geo": "^3.1.1",
+    "@types/d3-shape": "^3.2.0",
+    "@types/node": "^22.20.5",
+    "d3-geo": "^3.1.1",
+    "d3-shape": "^3.2.0",
+    "esbuild": "^0.28.2",
+    "maplibre-gl": "^6.14.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "mmdb-lib": "^3.0.3"
+  }
+}
