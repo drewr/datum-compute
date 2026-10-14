@@ -7,71 +7,23 @@
 #
 #   bin/gwmap          apply, and print "connector alias" lines (also saved to state/<fleet>/gw-aliases)
 #   bin/gwmap --clear  remove the aliases and the table
-#   bin/gwmap --check  exit 0 if the gateway has every alias, 1 if it needs (re)applying, e.g. after a restart
-#   bin/gwmap --watch [SECS]   check every SECS (default 30) and re-apply when a check fails; stays in the
-#                      foreground, so run it in a spare terminal or under nohup/tmux
+#   bin/gwmap --check  exit 0 if the gateway has every alias, 1 if it needs (re)applying
+#   bin/gwmap --watch [SECS]   check every SECS (default 30) and re-apply when a check fails, here in the
+#                      foreground. The jump host runs the same watcher on its own (see bin/jump).
 #
 # The config lives in the gateway's network namespace only, so a gateway restart loses it. The gateway is
 # owned by the connect controller, so nothing on it can be made to persist; bin/setup and bin/jump re-run
-# this, and --watch heals it between runs. Aliases are numbered by sorted connector name (::101, ::102, ...), so a resize
-# renumbers them; always read gw-aliases for the current map.
+# this, and the watcher on the jump host heals it between runs. The script is files/gwmap.sh. Aliases are
+# numbered by sorted connector name (::101, ::102, ...), so a resize renumbers them; always read gw-aliases.
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-clear= check= watch=
-case ${1:-} in
-  "") ;;
-  --clear) clear=1 ;;
-  --check) check=1 ;;
-  --watch) watch=${2:-30} ;;
-  *) die "usage: bin/gwmap [--clear | --check | --watch [SECS]]" ;;
-esac
-if [ -n "$watch" ]; then
-  say "watching the gateway aliases every ${watch}s (ctrl-c to stop)"
-  while :; do
-    "$0" --check >/dev/null 2>&1 || { say "$(date +%T) aliases missing or stale; re-applying"; "$0" >/dev/null || warn "re-apply failed"; }
-    sleep "$watch"
-  done
+export PROJECT FLEET NET GW_LOCATION
+GW=$(gateway_for_net); [ -z "$GW" ] || export GW
+if [ "${1:-}" = --check ] || [ "${1:-}" = --watch ] || [ "${1:-}" = --clear ]; then
+  [ "$1" = --clear ] && rm -f "$STATE_DIR/gw-aliases"
+  exec bash "$DEMO_DIR/files/gwmap.sh" "$@"
 fi
-
-GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
-wl=$(dc get connectgateway "$GW" -o json 2>/dev/null | jq -r '.status.workloadRef // empty')
-[ -n "$wl" ] || { warn "gateway $GW has no workload yet; nothing to map"; exit 0; }
-read -r inst gaddr < <(dc get instances -o json | jq -r --arg w "$wl" \
-  '[.items[] | select(.metadata.labels["compute.datumapis.com/workload-name"]==$w)] | sort_by(.metadata.name)[0] // empty
-   | "\(.metadata.name) \(first(.status.networkInterfaces[]?.assignments?.networkIP? // empty) // "" | sub("/.*";""))"')
-[ -n "${inst:-}" ] && [ -n "${gaddr:-}" ] || { warn "gateway instance for $GW has no address yet; re-run bin/gwmap"; exit 0; }
-pre=${gaddr%:*}   # fd20:0:32::1:0
-
-members=; [ -n "$clear" ] || members=$(fleet_members "$GW" | sort)
-if [ -n "$check" ]; then
-  want=$(grep -c . <<<"$members")
-  have=$(datumctl compute exec "$inst" --project "$PROJECT" -- nft list table ip6 jumpmap 2>/dev/null | grep -c ' dnat to ')
-  [ "$have" = "$want" ] && [ "$want" -gt 0 ]; exit
-fi
-script=$STATE_DIR/gwmap.sh
-{
-  echo "pre=$pre"
-  echo 'ip -6 -o addr show dev eth0 scope global | awk "{print \$4}" | grep -E "^$pre:[0-9a-f]+/128\$" | while read -r a; do ip -6 addr del "$a" dev eth0; done'
-  echo 'nft delete table ip6 jumpmap 2>/dev/null'
-  if [ -n "$members" ]; then
-    echo 'nft -f - <<NFT'
-    echo 'table ip6 jumpmap {'
-    echo '  chain pre { type nat hook prerouting priority dstnat; policy accept;'
-    i=0; while read -r c a; do
-      i=$((i+1)); printf '    ip6 daddr %s:%x dnat to %s\n' "$pre" $((256+i)) "$a"
-    done <<<"$members"
-    echo '  }'; echo '}'; echo NFT
-    i=0; while read -r c a; do i=$((i+1)); printf 'ip -6 addr add %s:%x/128 dev eth0 nodad\n' "$pre" $((256+i)); done <<<"$members"
-  fi
-} >"$script"
-ok=
-for _ in $(seq 6); do
-  datumctl compute exec "$inst" -i --project "$PROJECT" -- sh <"$script" >/dev/null 2>&1 && { ok=1; break; }; sleep 5
-done
-rm -f "$script"
-[ -n "$ok" ] || die "could not configure gateway $inst; re-run bin/gwmap"
-if [ -n "$clear" ]; then rm -f "$STATE_DIR/gw-aliases"; say "cleared the aliases on $inst"; exit 0; fi
-i=0; out=; while read -r c a; do i=$((i+1)); out+=$(printf '%s %s:%x' "$c" "$pre" $((256+i)))$'\n'; done <<<"$members"
+[ $# = 0 ] || die "usage: bin/gwmap [--clear | --check | --watch [SECS]]"
+out=$(bash "$DEMO_DIR/files/gwmap.sh") || exit 1
 printf '%s' "$out" >"$STATE_DIR/gw-aliases"
-say "gateway $inst: $(grep -c . <<<"$members") member aliases"
 printf '%s' "$out"
