@@ -9,7 +9,9 @@ The browser runs Cloudflare's open-source measurement engine, [`@cloudflare/spee
 - Both return `Server-Timing: app;dur=…`, which the engine subtracts from time-to-first-byte to get latency.
 - `GET /__meta` returns the instance's location (`LOCATION`), its hostname, the client's address cut to /24 or /48, the client's network (AS number and name), and the client's rough place (city, and coordinates rounded to about 1 km) for the map's route.
 
-The network and place come from DB-IP's [IP to ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) and [IP to City Lite](https://db-ip.com/db/download/ip-to-city-lite) databases (CC BY 4.0), which `default.nix` fetches and installs as `asn.mmdb` and `city.mmdb` next to `dist/`. The lookups happen on the instance, so client addresses go nowhere else. The city database is about 130 MB, which the server holds in memory.
+The network and place come from DB-IP's [IP to ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) and [IP to City Lite](https://db-ip.com/db/download/ip-to-city-lite) databases (CC BY 4.0), which `default.nix` fetches and installs as `asn.mmdb` and `city.mmdb` next to `dist/`. The lookups happen on the instance. The city database is about 130 MB, which the server holds in memory.
+
+The map is [OpenFreeMap](https://openfreemap.org)'s Positron basemap (OpenStreetMap data), drawn by [MapLibre GL JS](https://maplibre.org) and recolored from the `--map-*` tokens in `theme.ts`. The browser loads the style and tiles from OpenFreeMap directly. The build copies MapLibre's worker into `dist/` next to `client.js`, and the server gzips the three browser files once at startup.
 
 It differs from Cloudflare's test in three ways:
 

@@ -7,6 +7,7 @@ import http from "node:http";
 import os from "node:os";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import mmdb from "mmdb-lib";
 import type { AsnResponse, CityResponse } from "mmdb-lib/lib/reader/response.js";
 import { PAGE } from "./page.js";
@@ -25,7 +26,18 @@ const MAX_BYTES = 100e6;
 // the server spends no time generating them.
 const CHUNK = randomBytes(1 << 20);
 
-const CLIENT_JS = readFileSync(new URL("./client.js", import.meta.url));
+// The browser bundle (dist/client.js, the client.css that esbuild splits out
+// of it, and MapLibre's worker, which the build copies next to them), gzipped
+// once here since it's about 1.6 MB.
+const ASSETS: Record<string, { type: string; body: Buffer; gzip: Buffer }> = {};
+for (const [name, type] of [
+  ["client.js", "text/javascript; charset=utf-8"],
+  ["client.css", "text/css; charset=utf-8"],
+  ["maplibre-gl-worker.mjs", "text/javascript; charset=utf-8"],
+]) {
+  const body = readFileSync(new URL(`./${name}`, import.meta.url));
+  ASSETS[`/${name}`] = { type, body, gzip: gzipSync(body, { level: 9 }) };
+}
 
 // The instance's hostname, for the page's "Served by". Unikernel instances
 // have none (os.hostname() is "(none)"), so the page leaves the row out.
@@ -171,9 +183,16 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   if (req.method === "GET" && url.pathname === "/__down") return down(req, res, url, start);
   if (req.method === "POST" && url.pathname === "/__up") return up(req, res, start);
   if (req.method === "GET" && url.pathname === "/") return send(res, 200, PAGE);
-  if (req.method === "GET" && url.pathname === "/client.js") {
-    res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" });
-    res.end(CLIENT_JS);
+  const asset = req.method === "GET" ? ASSETS[url.pathname] : undefined;
+  if (asset) {
+    const gzip = /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""));
+    res.writeHead(200, {
+      "content-type": asset.type,
+      "cache-control": "no-cache",
+      vary: "accept-encoding",
+      ...(gzip ? { "content-encoding": "gzip" } : {}),
+    });
+    res.end(gzip ? asset.gzip : asset.body);
     return;
   }
   if (req.method === "GET" && url.pathname === "/__meta") {

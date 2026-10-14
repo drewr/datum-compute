@@ -76,8 +76,16 @@ export const THEME_CSS = `
     --chart-up: var(--canyon-clay);
     --progress-done: var(--pine-forge);
     --progress-todo: var(--utility-5);
-    --land: oklch(90.5% .006 95);
-    --sea: var(--tint);
+    /* The map's basemap (OpenFreeMap tiles), recolored by role. */
+    --map-land: oklch(96.6% .003 100);
+    --map-water: oklch(89.5% .012 240);
+    --map-park: oklch(93.5% .012 140);
+    --map-road: #fff;
+    --map-road-casing: oklch(88% .004 95);
+    --map-border: oklch(76% .012 250);
+    --map-label: var(--midnight-fjord);
+    --map-label-minor: oklch(48% .02 250);
+    --map-halo: oklch(96.6% .003 100);
     --score-on: var(--pine-forge);
     --score-off: var(--utility-5);
     --sans: "Alliance No1", "Alliance No.1", "DM Sans", ui-sans-serif, system-ui, sans-serif;
@@ -99,8 +107,15 @@ export const THEME_CSS = `
     --chart-up: oklch(72% .06 18.4);
     --progress-done: var(--aurora-moss);
     --progress-todo: var(--utility-2);
-    --land: var(--utility-2);
-    --sea: oklch(21% .042 253.7);
+    --map-land: oklch(29% .038 253.6);
+    --map-water: oklch(21% .042 253.7);
+    --map-park: oklch(30.5% .04 200);
+    --map-road: oklch(36% .034 253.8);
+    --map-road-casing: oklch(33% .036 253.7);
+    --map-border: oklch(48% .03 253.8);
+    --map-label: oklch(90% .006 100);
+    --map-label-minor: var(--utility-4);
+    --map-halo: oklch(25% .042 253.7);
     --score-on: var(--aurora-moss);
     --score-off: var(--utility-2);
   }

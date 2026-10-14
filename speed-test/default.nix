@@ -48,7 +48,7 @@ let
         ./app/src
       ];
     };
-    npmDepsHash = "sha256-6PiwQnbSHAvV0dOdjT2Ns6mu3rYz74iIWRVDOFZb0cY=";
+    npmDepsHash = "sha256-mxb72IAa0e85EBGyDATWP536kTxfXbNlQ80/QmSByHk=";
     nodejs = pkgs.nodejs_22; # npm, tsc and esbuild at build time; nodejs-slim at runtime
     installPhase = ''
       runHook preInstall

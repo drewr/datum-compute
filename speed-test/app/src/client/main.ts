@@ -1,11 +1,10 @@
 // Runs Cloudflare's measurement engine against this server and draws the
 // results into the page from ../page.ts. Bundled by esbuild into dist/client.js.
 import SpeedTest, { type MeasurementConfig, type Results } from "@cloudflare/speedtest";
-import { geoGraticule10, geoInterpolate, geoMercator, geoPath } from "d3-geo";
+import { geoInterpolate } from "d3-geo";
 import { area, curveMonotoneX, line } from "d3-shape";
-import { feature } from "topojson-client";
-import type { Topology, GeometryCollection } from "topojson-specification";
-import land110 from "world-atlas/land-110m.json";
+import * as maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 
 // The engine's default sequence (speedtest 1.14) without the packetLoss step,
 // which needs a TURN relay, and without the final 250 MB downloads. Each
@@ -241,10 +240,7 @@ dialog.addEventListener("click", (e) => {
 let resizeTimer = 0;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(() => {
-    render();
-    drawMap();
-  }, 100);
+  resizeTimer = window.setTimeout(render, 100);
 });
 
 // --- server location ----------------------------------------------------------
@@ -260,82 +256,142 @@ interface Meta {
   };
 }
 
-const mapEl = $("#map");
-const landTopo = land110 as unknown as Topology<{ land: GeometryCollection }>;
-const land = feature(landTopo, landTopo.objects.land);
 let server: { lat: number; lon: number } | null = null;
 let client: { lat: number; lon: number; city: string; country: string } | null = null;
-let zoom = 1;
 
-// Like Cloudflare's map: when the client's rough place is known, frame it and
-// the server with the route between them; otherwise show the region around
-// the server. Never zoom in past about a region (26° wide), so a client in
-// the same metro still gets some map around the pair.
-function drawMap(): void {
-  const w = mapEl.clientWidth;
-  const h = mapEl.clientHeight;
-  if (!w || !h) return;
-  const projection = geoMercator();
-  let center: [number, number] = [0, 20];
-  if (server) {
-    const span = 26;
-    projection.fitExtent([[0, 0], [w, h]], {
-      type: "MultiPoint",
-      coordinates: [
-        [server.lon - span, server.lat - span * 0.55],
-        [server.lon + span, server.lat + span * 0.55],
-      ],
-    });
-    const regional = projection.scale();
-    center = [server.lon, server.lat];
-    if (client) {
-      // Room around the pair, more at the bottom for the zoom and credit.
-      projection.fitExtent([[48, 40], [w - 48, h - 72]], {
-        type: "LineString",
-        coordinates: [[client.lon, client.lat], [server.lon, server.lat]],
-      });
-      projection.scale(Math.min(projection.scale(), regional));
-      center = geoInterpolate([client.lon, client.lat], [server.lon, server.lat])(0.5);
-    }
-  } else {
-    projection.fitSize([w, h], { type: "Sphere" });
-  }
-  projection.scale(projection.scale() * zoom);
-  const [px, py] = projection(center)!;
-  const [tx, ty] = projection.translate();
-  projection.translate([tx + w / 2 - px, ty + (server && client ? h / 2 - 16 : h / 2) - py]);
+// The map is OpenFreeMap's Positron basemap (OpenStreetMap data in the
+// OpenMapTiles schema, drawn by MapLibre), recolored by role from the
+// --map-* tokens in theme.ts so it follows Datum's palette and the theme.
+const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 
-  const path = geoPath(projection);
-  let overlay = "";
-  if (server && client) {
-    const route = path({ type: "LineString", coordinates: [[client.lon, client.lat], [server.lon, server.lat]] }) ?? "";
-    const [cx, cy] = projection([client.lon, client.lat])!;
-    const where = [client.city, client.country].filter(Boolean).join(", ");
-    overlay += `<path class="route" d="${route}"/>
-      <g class="client-marker"><title>You${where ? `: ${where}` : ""} (approximate)</title><circle cx="${cx}" cy="${cy}" r="5"/></g>`;
-  }
-  if (server) {
-    const [x, y] = projection([server.lon, server.lat])!;
-    overlay += `<circle class="marker-halo" cx="${x}" cy="${y}" r="16"/><circle class="marker" cx="${x}" cy="${y}" r="6"/>`;
-  }
-  const label = server && client ? "Map of your approximate location and the server" : "Map of the server location";
-  const svg = `<svg class="map-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="${label}">
-    <path class="graticule" d="${path(geoGraticule10()) ?? ""}"/>
-    <path class="land" d="${path(land) ?? ""}"/>
-    ${overlay}
-  </svg>`;
-  mapEl.querySelector(".map-svg")?.remove();
-  mapEl.insertAdjacentHTML("afterbegin", svg);
+// MapLibre takes sRGB colors; the tokens are oklch, so let the browser
+// convert them by painting one pixel.
+const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+function token(name: string): string {
+  probe.clearRect(0, 0, 1, 1);
+  probe.fillStyle = "#000";
+  probe.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  probe.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = probe.getImageData(0, 0, 1, 1).data;
+  return `rgba(${r},${g},${b},${(a / 255).toFixed(3)})`;
 }
 
-$("#zoom-in").addEventListener("click", () => {
-  zoom = Math.min(zoom * 1.6, 12);
-  drawMap();
-});
-$("#zoom-out").addEventListener("click", () => {
-  zoom = Math.max(zoom / 1.6, 0.25);
-  drawMap();
-});
+function recolor(map: maplibregl.Map): void {
+  const c = {
+    land: token("--map-land"),
+    water: token("--map-water"),
+    park: token("--map-park"),
+    road: token("--map-road"),
+    casing: token("--map-road-casing"),
+    border: token("--map-border"),
+    label: token("--map-label"),
+    minor: token("--map-label-minor"),
+    halo: token("--map-halo"),
+    brand: token("--brand"),
+  };
+  for (const layer of map.getStyle().layers) {
+    const id = layer.id;
+    const src = "source-layer" in layer ? layer["source-layer"] : "";
+    const set = (prop: keyof maplibregl.AllPaintProperties, value: string) => map.setPaintProperty(id, prop, value);
+    if (layer.type === "background") set("background-color", c.land);
+    else if (layer.type === "fill") {
+      if (src === "water") set("fill-color", c.water);
+      else if (src === "park" || id.includes("wood")) set("fill-color", c.park);
+      else if (src === "transportation" || src === "aeroway") set("fill-color", c.road);
+      else {
+        set("fill-color", c.land);
+        if (src === "building") set("fill-outline-color", c.casing);
+      }
+    } else if (layer.type === "line") {
+      if (id === "route") set("line-color", c.brand);
+      else if (src === "waterway") set("line-color", c.water);
+      else if (src === "boundary") set("line-color", c.border);
+      else set("line-color", id.includes("casing") ? c.casing : c.road);
+    } else if (layer.type === "symbol") {
+      set("text-color", src === "place" ? c.label : c.minor);
+      set("text-halo-color", c.halo);
+    }
+  }
+}
+
+// The great circle between the two ends as a line of short segments, with
+// longitudes kept continuous so a route across the antimeridian doesn't
+// wrap the long way round.
+function routeCoordinates(): [number, number][] {
+  if (!server || !client) return [];
+  const along = geoInterpolate([client.lon, client.lat], [server.lon, server.lat]);
+  const coords: [number, number][] = [];
+  for (let i = 0; i <= 64; i++) {
+    let [lon, lat] = along(i / 64);
+    const prev = coords[coords.length - 1];
+    if (prev) while (lon - prev[0] > 180) lon -= 360;
+    if (prev) while (lon - prev[0] < -180) lon += 360;
+    coords.push([lon, lat]);
+  }
+  return coords;
+}
+
+function pin(className: string, title: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = className;
+  el.title = title;
+  return el;
+}
+
+let map: maplibregl.Map | null = null;
+try {
+  maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
+  map = new maplibregl.Map({
+    container: "map-canvas",
+    style: STYLE_URL,
+    center: [-97, 36],
+    zoom: 2.6,
+    attributionControl: false, // the credit pill in page.ts carries it
+    scrollZoom: false, // don't take over page scrolling
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
+  });
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+  map.on("style.load", () => {
+    map!.addSource("route", { type: "geojson", data: { type: "LineString", coordinates: routeCoordinates() } });
+    map!.addLayer({ id: "route", type: "line", source: "route", layout: { "line-cap": "round" }, paint: { "line-width": 2.5 } });
+    recolor(map!);
+  });
+  window.addEventListener("themechange", () => {
+    if (map?.isStyleLoaded()) recolor(map);
+  });
+} catch (err) {
+  console.error("map:", err); // no WebGL: the panel keeps its water color
+}
+
+// Like Cloudflare's map: frame the client's rough place and the server with
+// the route between them, or the region around the server alone. Never zoom
+// in past about a region, so a client in the server's metro still sees some
+// map around the pair.
+function showPlaces(): void {
+  if (!map || !server) return;
+  const m = map;
+  new maplibregl.Marker({ element: pin("server-pin", "Server") }).setLngLat([server.lon, server.lat]).addTo(m);
+  if (!client) {
+    m.jumpTo({ center: [server.lon, server.lat], zoom: 3.4 });
+    return;
+  }
+  const where = [client.city, client.country].filter(Boolean).join(", ");
+  new maplibregl.Marker({ element: pin("client-pin", `You${where ? `: ${where}` : ""} (approximate)`) })
+    .setLngLat([client.lon, client.lat])
+    .addTo(m);
+  const coords = routeCoordinates();
+  const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+  m.fitBounds(bounds, { padding: { top: 40, right: 72, bottom: 72, left: 72 }, maxZoom: 4.2, animate: false });
+  const update = () => (m.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "LineString", coordinates: coords });
+  if (m.isStyleLoaded()) update();
+  else m.once("style.load", update);
+}
+
+$("#zoom-in").addEventListener("click", () => map?.zoomIn());
+$("#zoom-out").addEventListener("click", () => map?.zoomOut());
 
 async function loadMeta(): Promise<void> {
   try {
@@ -365,7 +421,7 @@ async function loadMeta(): Promise<void> {
     console.error("meta:", err);
     for (const id of ["d-family", "d-location", "d-instance", "d-network", "d-ip"]) $(`#${id}`).textContent = "Unavailable";
   }
-  drawMap();
+  showPlaces();
 }
 
 loadMeta();

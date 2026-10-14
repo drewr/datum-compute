@@ -219,19 +219,19 @@ ${FONTS}
 
   /* map panel: rounded-md border p-4, map then details (mt-[10px], gap-2) */
   .map-box { display: flex; flex-direction: column; height: 100%; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-  .map { position: relative; flex: 1; min-height: 300px; border-radius: 6px; overflow: hidden; background: var(--sea); }
-  .map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .map .land { fill: var(--land); stroke: var(--surface); stroke-width: .6; }
-  .map .graticule { fill: none; stroke: var(--line); stroke-width: .5; opacity: .6; }
-  .map .marker-halo { fill: var(--brand); opacity: .22; }
-  .map .marker { fill: var(--brand); stroke: var(--surface); stroke-width: 2; }
-  .map .route { fill: none; stroke: var(--brand); stroke-width: 2; stroke-linecap: round; }
-  .map .client-marker circle { fill: var(--surface); stroke: var(--text); stroke-width: 2.5; }
-  .map-zoom { position: absolute; right: 16px; bottom: 56px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow: hidden; }
+  .map { position: relative; flex: 1; min-height: 300px; border-radius: 6px; overflow: hidden; background: var(--map-water); }
+  /* .map scoping outranks MapLibre's own .maplibregl-map { position: relative }. */
+  .map .map-canvas { position: absolute; inset: 0; }
+  .map-canvas .maplibregl-canvas:focus-visible { outline: none; }
+  /* MapLibre markers: the server's filled pin with a halo, the client's ring. */
+  .server-pin { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in oklab, var(--brand) 22%, transparent); }
+  .server-pin::after { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 2px var(--surface); }
+  .client-pin { width: 12px; height: 12px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2.5px var(--text); }
+  .map-zoom { position: absolute; z-index: 2; right: 16px; bottom: 56px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow: hidden; }
   .map-zoom button { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--text); cursor: pointer; padding: 0; }
   .map-zoom button + button { border-top: 1px solid var(--line); }
   .map-zoom button:hover { background: var(--tint); }
-  .map-credit { position: absolute; right: 16px; bottom: 16px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 12px; }
+  .map-credit { position: absolute; z-index: 2; right: 16px; bottom: 16px; max-width: calc(100% - 32px); padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 12px; line-height: 1.4; text-align: right; color: var(--text-subtle); }
   .map-credit a { text-decoration: none; }
   .details { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; min-height: 64.5px; }
   .details li { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -348,8 +348,9 @@ ${FONTS}
         <header class="block-head"><h2>Server Location</h2>${info("The Datum Cloud location of the compute instance that served this test.")}</header>
         <div class="map-box">
           <div class="map" id="map">
+            <div class="map-canvas" id="map-canvas"></div>
             <div class="map-zoom"><button type="button" id="zoom-in" aria-label="Zoom in">${icon(I.plus, "", 16)}</button><button type="button" id="zoom-out" aria-label="Zoom out">${icon(I.minus, "", 16)}</button></div>
-            <div class="map-credit"><a href="https://www.naturalearthdata.com/" target="_blank" rel="noopener">Natural Earth</a> · <a href="https://db-ip.com" target="_blank" rel="noopener">IP data by DB-IP</a></div>
+            <div class="map-credit"><a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · <a href="https://db-ip.com" target="_blank" rel="noopener">DB-IP</a></div>
           </div>
           <ul class="details">
             <li>${icon(I.network, "", 14)}<span class="k">Connected via</span> <span class="v" id="d-family">…</span></li>
@@ -389,16 +390,18 @@ ${FONTS}
       <ul>
         <li>sends you random data, and receives and discards the data you upload;</li>
         <li>reports your IP address back to this page, cut to /24 (IPv4) or /48 (IPv6) for display;</li>
-        <li>looks up which network (ASN) your address belongs to, and roughly where it is for the map, in copies of DB-IP's databases kept on the instance, so your address isn't sent to anyone else;</li>
+        <li>looks up which network (ASN) your address belongs to, and roughly where it is for the map, in copies of DB-IP's databases kept on the instance;</li>
         <li>keeps no log of your requests or results.</li>
       </ul>
     </div>
+    <p>The map comes from OpenFreeMap's tile servers, which your browser contacts directly, so they see your IP address as any website does.</p>
     <p>The results are computed in your browser by Cloudflare's open-source measurement engine and are not sent anywhere: not to Datum and not to Cloudflare.</p>
     <a href="https://www.datum.net/legal/privacy" target="_blank" rel="noopener">Datum Privacy Policy</a>
     <p class="note">Note: on a fast connection a test can transfer several hundred MB of data.</p>
   </div>
 </dialog>
 
+<link rel="stylesheet" href="/client.css">
 <script type="module" src="/client.js"></script>
 </body>
 </html>`;
