@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Report the project's Datum quotas that the demo consumes, as used/total, so you can see headroom
-# before bin/setup. Read-only; needs no AWS access.
+# before bin/setup. Read-only; needs no AWS access. Uses the active datumctl context (set PROJECT to
+# override the project).
 #
 #   bin/quotacheck          the quotas the demo uses
 #   bin/quotacheck --all    every quota the project has
@@ -12,10 +13,7 @@
 need datumctl jq
 case "${1:-}" in ""|--all) ;; *) die "usage: bin/quotacheck [--all]" ;; esac
 
-PROJECT=${PROJECT:-$(datumctl ctx 2>/dev/null | sed -n 's/.*\(project-[^[:space:]]*\)[[:space:]]*project[[:space:]]*\*.*/\1/p')}
-[ -n "$PROJECT" ] || die "datumctl has no project context (datumctl ctx use ORG/PROJECT, or set PROJECT)"
-
-json=$(timeout 60 datumctl --project "$PROJECT" get allowancebuckets -A -o json 2>&1) || die "cannot read quotas for $PROJECT: $(tail -1 <<<"$json")"
+json=$(timeout 60 datumctl ${PROJECT:+--project "$PROJECT"} get allowancebuckets -A -o json 2>&1) || die "cannot read quotas: $(tail -1 <<<"$json")"
 
 jq -r --arg all "${1:-}" '
   ["connect.datumapis.com/connectgateways","networking.datumapis.com/connectors",
