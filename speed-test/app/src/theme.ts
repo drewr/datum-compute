@@ -97,6 +97,7 @@ export const THEME_CSS = `
     --map-halo: oklch(96.6% .003 100);
     --score-on: var(--pine-forge);
     --score-off: var(--utility-5);
+    --danger: oklch(55% .15 25);
     --sans: "Alliance No1", "Alliance No.1", "DM Sans", ui-sans-serif, system-ui, sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
@@ -127,6 +128,7 @@ export const THEME_CSS = `
     --map-halo: oklch(25% .042 253.7);
     --score-on: var(--aurora-moss);
     --score-off: var(--utility-2);
+    --danger: oklch(72% .14 25);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }

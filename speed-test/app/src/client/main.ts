@@ -8,8 +8,12 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { MARK } from "../theme.js";
 
 // The engine's default sequence (speedtest 1.14) without the packetLoss step,
-// which needs a TURN relay, and without the final 250 MB downloads. Each
-// direction still stops stepping up once one request takes a second.
+// which needs a TURN relay, the final 250 MB downloads, or the 25 and 50 MB
+// uploads, and with two 10 MB uploads instead of four. Datum's edge offers
+// HTTP/2 with a 64 KB stream window, which holds an upload to about 64 KB
+// per round trip, so big uploads there take tens of seconds without changing
+// the result. Each direction still stops stepping up once one request takes
+// a second.
 const MEASUREMENTS: MeasurementConfig[] = [
   { type: "latency", numPackets: 2 },
   { type: "download", bytes: 1e5, count: 1, bypassMinDuration: true },
@@ -24,15 +28,11 @@ const MEASUREMENTS: MeasurementConfig[] = [
   { type: "latency", numPackets: 2 },
   { type: "download", bytes: 1e7, count: 6 },
   { type: "latency", numPackets: 2 },
-  { type: "upload", bytes: 1e7, count: 4 },
+  { type: "upload", bytes: 1e7, count: 2 },
   { type: "latency", numPackets: 2 },
   { type: "download", bytes: 25e6, count: 4 },
   { type: "latency", numPackets: 2 },
-  { type: "upload", bytes: 25e6, count: 4 },
-  { type: "latency", numPackets: 2 },
   { type: "download", bytes: 1e8, count: 3 },
-  { type: "latency", numPackets: 2 },
-  { type: "upload", bytes: 5e7, count: 3 },
 ];
 
 const TOTAL_STEPS = MEASUREMENTS.reduce((n, m) => n + (m.type === "latency" ? m.numPackets : "count" in m ? m.count : 0), 0);
@@ -53,7 +53,9 @@ function sig3(n: number): string {
   if (n >= 10) return n.toFixed(1);
   return n.toFixed(2);
 }
-const mbps = (bps: number | undefined) => (bps === undefined ? undefined : sig3(bps / 1e6));
+// The engine reports 0 bps until some request has run for 10 ms, which on a
+// fast link can take a while; show "-" until then, not "0.00".
+const mbps = (bps: number | undefined) => (!bps ? undefined : sig3(bps / 1e6));
 const ms = (v: number | null | undefined) => (v === undefined || v === null ? undefined : v < 10 ? v.toFixed(1) : Math.round(v).toString());
 
 function setValue(id: string, text: string | undefined): void {
@@ -177,12 +179,43 @@ function render(): void {
   setScores(finished ? r : null);
 }
 
+// The engine gives up on the whole test when any one request fails (it only
+// retries a 429), and it can't resume after that, so a failure ends the run
+// with a short reason and a Retry button instead of a frozen bar.
+let failed = false;
+const statusBox = $(".status");
+const retry = $<HTMLButtonElement>("#retry");
+
 function setRunning(running: boolean): void {
   toggle.classList.toggle("running", running);
   toggle.setAttribute("aria-label", running ? "Pause" : "Resume");
-  toggle.disabled = !!engine?.isFinished;
+  toggle.disabled = !!engine?.isFinished || failed;
   retest.disabled = !engine;
-  if (!running && engine && !engine.isFinished) status.textContent = "Paused";
+  if (!running && engine && !engine.isFinished && !failed) status.textContent = "Paused";
+}
+
+// "Connection failed to https://…/__up?bytes=10000000." or "Request failed
+// with 503: https://…/__down?bytes=0&during=download" into words.
+function describeError(err: string): string {
+  const what = /bytes=0\b/.test(err)
+    ? "a latency check"
+    : /__up|Upload/.test(err)
+      ? "an upload"
+      : /__down|Download/.test(err)
+        ? "a download"
+        : "the test";
+  const code = err.match(/failed with (\d{3})/)?.[1];
+  return code ? `Stopped: the server answered ${code} to ${what}.` : `Stopped: the connection dropped during ${what}.`;
+}
+
+function fail(err: string): void {
+  console.error("speed test:", err);
+  failed = true;
+  statusBox.classList.add("failed");
+  status.textContent = describeError(err);
+  status.title = err;
+  retry.hidden = false;
+  setRunning(false);
 }
 
 function start(): void {
@@ -190,6 +223,10 @@ function start(): void {
   $(".overview-body").removeAttribute("inert");
   engine?.pause();
   current = "";
+  failed = false;
+  statusBox.classList.remove("failed");
+  status.removeAttribute("title");
+  retry.hidden = true;
   setScores(null);
   engine = new SpeedTest({
     autoStart: false,
@@ -214,10 +251,7 @@ function start(): void {
     render();
     setRunning(false);
   };
-  engine.onError = (err) => {
-    console.error("speed test:", err);
-    status.textContent = `Error: ${err}`;
-  };
+  engine.onError = fail;
   render();
   status.textContent = "Starting";
   engine.play();
@@ -225,6 +259,7 @@ function start(): void {
 
 $("#start").addEventListener("click", start);
 retest.addEventListener("click", start);
+retry.addEventListener("click", start);
 toggle.addEventListener("click", () => {
   if (!engine || engine.isFinished) return;
   if (engine.isRunning) engine.pause();

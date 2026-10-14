@@ -168,7 +168,11 @@ ${FONTS}
   .ctl-btn.running .pause { display: block; }
   .ctl-btn.running .play { display: none; }
   .status { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-  .status-text { font-size: 13px; font-weight: 700; line-height: 1; }
+  .status-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .status-text { font-size: 13px; font-weight: 700; line-height: 1.2; }
+  .status.failed .status-text { color: var(--danger); }
+  .status.failed .progress i.done { background: var(--danger); opacity: .55; }
+  .retry { font-size: 13px; line-height: 1.2; }
   .progress { display: flex; align-items: stretch; height: 18px; gap: 0; }
   .progress i {
     flex: 1 1 0; min-width: 0; background: var(--progress-todo);
@@ -320,7 +324,7 @@ ${FONTS}
                 <button class="ctl-btn" id="toggle" type="button" aria-label="Resume" disabled>${icon(I.play, "play")}${icon(I.pause, "pause")}</button>
                 <button class="ctl-btn" id="retest" type="button" aria-label="Retest" disabled>${icon(I.retest)}</button>
                 <div class="status">
-                  <span class="status-text" id="status" aria-live="polite">Paused</span>
+                  <div class="status-row"><span class="status-text" id="status" aria-live="polite">Paused</span><button class="link-btn retry" id="retry" type="button" hidden>Retry</button></div>
                   <div class="progress" id="progress" aria-hidden="true"></div>
                 </div>
               </div>
