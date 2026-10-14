@@ -112,12 +112,6 @@ done
 say "nodes: $(nodes | wc -l) in $(regions | wc -l) regions; new: ${new[*]:-none}"
 
 # ---- 1. Datum: network + gateway -------------------------------------------------------------
-if [ -z "$NET_FIXED" ] && [ ! -s "$STATE_DIR/net" ] && [ -z "$(gateway_for_net)" ]; then
-  # no gateway here yet: reuse an idle one from an earlier fleet rather than spend quota on another
-  old=$(adoptable_net)
-  if [ -n "$old" ]; then say "adopting the idle network $old and its gateway from an earlier fleet"; NET=$old; export NET; fi
-fi
-printf '%s\n' "$NET" >"$STATE_DIR/net"
 if ! dc get networks "$NET" >/dev/null 2>&1; then
   say "creating Network $NET"
   dc create --validate=false -f - <<Y
@@ -158,11 +152,6 @@ Y
       *quota*|*Forbidden*)
         warn "the ConnectGateway quota (3 on staging) is used up. Gateways in this project:"
         dc get connectgateways -o json 2>/dev/null | jq -r '.items[] | "    \(.metadata.name)  network=\(.spec.networkRef)  \(.status.phase // "?")  created \(.metadata.creationTimestamp)"' >&2
-        idle=$(idle_gateways | grep -v -- "^$NET " || true)
-        if [ -n "$idle" ]; then
-          warn "these gateways have no members bound; another operator's may belong to a live fleet, so reuse only one that is yours:"
-          while read -r inet igw; do warn "  NET=$inet bin/setup ...   (reuses $igw; the Datum project is shared across AWS accounts)"; done <<<"$idle"
-        fi
         warn "a Dormant gateway has no running workload but still counts. Delete one that is not in use: datumctl delete connectgateway <name>"
         warn "(an owner's fleet is removed with its own bin/teardown)" ;;
     esac

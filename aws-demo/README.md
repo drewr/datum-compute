@@ -206,13 +206,11 @@ shared permissions boundary policy. The original network and gateway in the proj
   The controller stops an idle gateway's workload (phase `Dormant`) but never deletes the gateway, so
   dormant gateways still count. If `bin/setup` hits the quota it lists the project's gateways with
   their network and phase; delete one that is not in use. `bin/teardown` keeps the network and gateway
-  (deleting a gateway leaks its quota claim, which only staff can clear); `bin/teardown --net` removes
+  (deleting a gateway can leak its quota claim, which only staff can clear), so a re-run of the same fleet reuses them; `bin/teardown --net` removes
   them, including ones a `join` created with a hash suffix.
-  `bin/setup` reuses a gateway already on its network at `GW_LOCATION` (the conventional name first, else
-  any, such as a hash-suffixed one) and logs `reusing ConnectGateway`. A new fleet name has no network
-  yet, so setup first adopts an idle network of yours (`<user>-*-net` with a gateway at `GW_LOCATION`
-  and no members bound) and records the choice in `state/<fleet>/net`; it creates a gateway only if
-  there is nothing to adopt. Set `NET` to pick a network yourself.
+  `bin/setup` reuses a gateway already on its own network at `GW_LOCATION` (the conventional name first, else
+  any, such as a hash-suffixed one) and logs `reusing ConnectGateway`; it creates one only if none exists.
+  It never borrows a gateway from another fleet's network.
 - **Broad binding.** The service accounts hold `editor`. Push for a narrow connect role before any
   use outside staging. Teardown removes the bindings.
 - **Many nodes.** `bin/setup 100` with `REGIONS=na` puts nodes in the region with the fewest first, so they spread evenly; with several continents (`REGIONS=eu,na`) the continent with the fewest goes first and ties are random. The gateway routes at most 32 peers (the nodes plus the viewer), so more than 30 nodes needs `FORCE=1` and the extra peers will not be reachable. Each `t4g.micro` uses 2 vCPUs and a new AWS account's per-region vCPU quota may be as low as 5, so large counts per region may fail at launch; setup then stops for that node and a re-run retries. `JOBS` (default 12) limits parallel work.
