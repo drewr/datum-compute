@@ -7,14 +7,31 @@
 #
 #   bin/gwmap          apply, and print "connector alias" lines (also saved to state/<fleet>/gw-aliases)
 #   bin/gwmap --clear  remove the aliases and the table
+#   bin/gwmap --check  exit 0 if the gateway has every alias, 1 if it needs (re)applying, e.g. after a restart
+#   bin/gwmap --watch [SECS]   check every SECS (default 30) and re-apply when a check fails; stays in the
+#                      foreground, so run it in a spare terminal or under nohup/tmux
 #
-# The config lives in the gateway's network namespace only, so a gateway restart loses it; bin/setup and
-# bin/jump re-run this. Aliases are numbered by sorted connector name (::101, ::102, ...), so a resize
+# The config lives in the gateway's network namespace only, so a gateway restart loses it. The gateway is
+# owned by the connect controller, so nothing on it can be made to persist; bin/setup and bin/jump re-run
+# this, and --watch heals it between runs. Aliases are numbered by sorted connector name (::101, ::102, ...), so a resize
 # renumbers them; always read gw-aliases for the current map.
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-clear=; [ "${1:-}" = --clear ] && clear=1
-[ $# = 0 ] || [ -n "$clear" ] || die "usage: bin/gwmap [--clear]"
+clear= check= watch=
+case ${1:-} in
+  "") ;;
+  --clear) clear=1 ;;
+  --check) check=1 ;;
+  --watch) watch=${2:-30} ;;
+  *) die "usage: bin/gwmap [--clear | --check | --watch [SECS]]" ;;
+esac
+if [ -n "$watch" ]; then
+  say "watching the gateway aliases every ${watch}s (ctrl-c to stop)"
+  while :; do
+    "$0" --check >/dev/null 2>&1 || { say "$(date +%T) aliases missing or stale; re-applying"; "$0" >/dev/null || warn "re-apply failed"; }
+    sleep "$watch"
+  done
+fi
 
 GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
 wl=$(dc get connectgateway "$GW" -o json 2>/dev/null | jq -r '.status.workloadRef // empty')
@@ -26,6 +43,11 @@ read -r inst gaddr < <(dc get instances -o json | jq -r --arg w "$wl" \
 pre=${gaddr%:*}   # fd20:0:32::1:0
 
 members=; [ -n "$clear" ] || members=$(fleet_members "$GW" | sort)
+if [ -n "$check" ]; then
+  want=$(grep -c . <<<"$members")
+  have=$(datumctl compute exec "$inst" --project "$PROJECT" -- nft list table ip6 jumpmap 2>/dev/null | grep -c ' dnat to ')
+  [ "$have" = "$want" ] && [ "$want" -gt 0 ]; exit
+fi
 script=$STATE_DIR/gwmap.sh
 {
   echo "pre=$pre"

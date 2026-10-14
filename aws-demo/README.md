@@ -194,7 +194,8 @@ network, running a small Alpine image (`jump/Dockerfile`: iputils `ping`, `trace
   `bin/gwmap` (run by `bin/setup` and `bin/jump`) gives each node an alias address in the gateway's /96
   and DNATs it to the node on the gateway, so from the jump `ping -6 fd20:0:32::1:0:101` reaches a node.
   The map is in `state/<fleet>/gw-aliases` and is what netcheck uses here. It lives on the running gateway
-  only, so a gateway restart loses it until the next `bin/setup` or `bin/gwmap`. Aliases are numbered by
+  only (the connect controller owns the gateway, so nothing there can persist), so a gateway restart loses
+  it until the next `bin/setup` or `bin/gwmap`. `bin/gwmap --watch` re-applies it automatically (`--check` tests it). Aliases are numbered by
   sorted node name, so a resize renumbers them.
 - The image is built by `jump/build.sh` (pushes `ghcr.io/drewr/datum-jump`, pinned by digest in
   `jump/IMAGE`; same pull secret as the viewer).
