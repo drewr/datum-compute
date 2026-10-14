@@ -251,3 +251,10 @@ datum_down() {
   dc delete serviceaccountkeys "$n-key" >/dev/null 2>&1
   dc delete serviceaccounts "$n" >/dev/null 2>&1
 }
+
+# fleet_members GATEWAY -> "connector address" lines for this fleet's nodes attached to GATEWAY
+fleet_members() {
+  dc get connectnetworkbindings -o json | jq -r --arg gw "$1" --argjson names "$(nodes | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
+    '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
+     | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"'
+}

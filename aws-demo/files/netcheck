@@ -5,18 +5,24 @@ PROJECT=project-xx4hh
 [ -r /etc/netcheck.conf ] && . /etc/netcheck.conf
 MEMBERS=/etc/netcheck-members
 T=/home/datum/.local/state/datumctl/connect/daemon/daemon_auth/setup.token
-st=$(runuser -u datum -- env HOME=/home/datum XDG_RUNTIME_DIR=/run/user/$(id -u datum) datumctl connect status --project $PROJECT --token-file $T 2>&1)
-me=$(echo "$st" | awk '/^Connector:/{print $2}')
-net=$(echo "$st" | awk '/^Network /{gsub(":","",$2); print $2}')
-addr=$(echo "$st" | sed -n 's/^Network [^:]*: connected, \([^ ]*\) on \([^ ]*\) .*/\1 \2/p')
-gw=$(echo "$st" | sed -n 's/.*VPC gateway: \([^ ]*\) (\([^)]*\)).*/\1 \2/p')
-tr=$(echo "$st" | sed -n 's/.*Transport: \([^;]*\); IP datagram capacity: \([0-9]*\) bytes; MTU errors: \([0-9]*\).*/\1 mtu=\2 errs=\3/p')
+if [ -n "${JUMP:-}" ]; then   # the jump host (bin/jump): an instance on the VPC, not a connector
+  me=$JUMP net=$NET addr=$VPC_ADDR gw="$GW $LOC" tr="n/a (instance, no connector)" region=$LOC
+else
+  st=$(runuser -u datum -- env HOME=/home/datum XDG_RUNTIME_DIR=/run/user/$(id -u datum) datumctl connect status --project $PROJECT --token-file $T 2>&1)
+  me=$(echo "$st" | awk '/^Connector:/{print $2}')
+  net=$(echo "$st" | awk '/^Network /{gsub(":","",$2); print $2}')
+  addr=$(echo "$st" | sed -n 's/^Network [^:]*: connected, \([^ ]*\) on \([^ ]*\) .*/\1 \2/p')
+  gw=$(echo "$st" | sed -n 's/.*VPC gateway: \([^ ]*\) (\([^)]*\)).*/\1 \2/p')
+  tr=$(echo "$st" | sed -n 's/.*Transport: \([^;]*\); IP datagram capacity: \([0-9]*\) bytes; MTU errors: \([0-9]*\).*/\1 mtu=\2 errs=\3/p')
+fi
 v4=$(curl -4 -s -m3 https://checkip.amazonaws.com); v6=$(curl -6 -s -m3 https://api64.ipify.org 2>/dev/null)
 edge=$(curl -s -m3 https://edge.datum.net/ | sed -n 's/^region=//p')
-tok=$(curl -s -m2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-region=$(curl -s -m2 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/placement/region)
+if [ -z "${JUMP:-}" ]; then
+  tok=$(curl -s -m2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  region=$(curl -s -m2 -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/placement/region)
+fi
 ms() { awk -v v="$1" 'BEGIN{ if (v=="") print ""; else printf "%.1fms", v*1000 }'; }
-city() { set -- "${1%-[0-9]*}"; case $1 in
+city() { [[ $1 =~ ^(.+-[0-9]+)-[0-9]+$ ]] && set -- "${BASH_REMATCH[1]}"; case $1 in
   us-east-1) echo Ashburn;; us-east-2) echo Columbus;; us-west-1) echo "San Francisco";; us-west-2) echo Portland;;
   us-central-1) echo Dallas;; ca-central-1) echo Montreal;; ca-west-1) echo Calgary;; sa-east-1) echo "Sao Paulo";;
   eu-west-1) echo Dublin;; eu-west-2) echo London;; eu-west-3) echo Paris;; eu-central-1) echo Frankfurt;;
@@ -49,3 +55,6 @@ cw=0; while IFS=$'\t' read -r a r t; do c=$(city "$r"); [ ${#c} -gt $cw ] && cw=
 aw=$(echo "$rows" | awk -F'\t' '{ if (length($1)>w) w=length($1) } END{print w}'); rw=$(echo "$rows" | awk -F'\t' '{ if (length($2)>w) w=length($2) } END{print w}')
 while IFS=$'\t' read -r a r t; do printf '        - %-*s\t%-*s\t%-*s\t%s\n' "$aw" "$a" "$rw" "$r" "$cw" "$(city "$r")" "$t"; done <<<"$rows"
 rm -rf $d
+if [ -n "${JUMP:-}" ] && [ -n "$rows" ] && ! grep -q -v 'unreachable$' <<<"$rows"; then
+  echo "    (an instance cannot start traffic to a connector's address; from a node, ping this host at ${addr% *} instead)"
+fi

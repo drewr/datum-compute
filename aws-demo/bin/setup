@@ -390,9 +390,7 @@ for x in ${replaced[@]+"${replaced[@]}"}; do say "replaced $x; the old name stay
 
 # ---- 4. netcheck + member list on every instance ---------------------------------------------
 say "installing netcheck"
-members=$(dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" --argjson names "$(nodes | jq -R --arg f "$FLEET" '"\($f)-\(.)"' | jq -s .)" \
-  '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
-   | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"')
+members=$(fleet_members "$GW")
 [ -n "$members" ] || warn "no network bindings found yet; re-run bin/setup once the joins settle"
 for nd in $(nodes); do
   iid=$(instance_id "$nd" 2>/dev/null); [ -n "$iid" ] || { warn "$nd: no instance; netcheck not installed there"; continue; }

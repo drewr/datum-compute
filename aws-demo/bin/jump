@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Deploy (or refresh) the jump host: one general-purpose instance on the fleet's network with a shell and
-# network tools (ping, traceroute, mtr, dig, curl, nc, ssh), for poking at the VPC from inside it.
+# network tools (ping, traceroute, mtr, dig, curl, nc, ssh) and netcheck in /root, for poking at the VPC
+# from inside it. Every run refreshes netcheck and its member list, as bin/setup does for the nodes.
 # bin/setup calls it at the end unless JUMP=0. Safe to re-run.
 #
 #   bin/jump            deploy it and print how to get a shell
@@ -65,9 +66,30 @@ for _ in $(seq 60); do
   read -r inst addr <<<"$row"
   [ -n "$inst" ] && [ -n "$addr" ] && break; sleep 5
 done
-if [ -n "$inst" ]; then
-  say "jump instance $inst${addr:+ at $addr on $NET}"
-  say "shell: datumctl compute exec $inst -it --project $PROJECT -- sh"
-else
+if [ -z "$inst" ]; then
   warn "no jump instance with an address yet; check: datumctl get instances (workload $APP)"
+  exit 0
 fi
+say "jump instance $inst${addr:+ at $addr on $NET}"
+
+# netcheck and its member list go in over exec (there is no SSM here); retry while the agent starts
+GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
+members=$(fleet_members "$GW")
+script=$STATE_DIR/jump-netcheck.sh
+{
+  echo 'cat > /root/netcheck <<'"'NETCHECK_EOF'"
+  cat "$DEMO_DIR/files/netcheck"
+  echo NETCHECK_EOF
+  echo 'chmod 755 /root/netcheck'
+  printf 'printf "%%s\n" %q %q %q %q %q %q %q > /etc/netcheck.conf\n' "PROJECT=$PROJECT" "FLEET=$FLEET" "JUMP=$inst" "NET=$NET" "VPC_ADDR=$addr" "GW=$GW" "LOC=$GW_LOCATION"
+  printf 'cat > /etc/netcheck-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
+} >"$script"
+ok=
+for _ in $(seq 12); do
+  datumctl compute exec "$inst" -i --project "$PROJECT" -- sh <"$script" >/dev/null 2>&1 && { ok=1; break; }; sleep 10
+done
+rm -f "$script"
+if [ -z "$ok" ]; then warn "could not install netcheck on $inst; re-run bin/jump"
+elif [ -n "$members" ]; then say "netcheck installed in /root with $(grep -c . <<<"$members") members"
+else say "netcheck installed in /root, no members yet; re-run bin/jump after the joins settle"; fi
+say "shell: datumctl compute exec $inst -it --project $PROJECT -- sh   (then: netcheck)"
