@@ -215,7 +215,7 @@ shared permissions boundary policy. The original network and gateway in the proj
   there is nothing to adopt. Set `NET` to pick a network yourself.
 - **Broad binding.** The service accounts hold `editor`. Push for a narrow connect role before any
   use outside staging. Teardown removes the bindings.
-- **Many nodes.** `bin/setup 100` with `REGIONS=na` puts nodes in the region with the fewest first, so they spread evenly. The gateway routes at most 32 peers (the nodes plus the viewer), so more than 30 nodes needs `FORCE=1` and the extra peers will not be reachable. Each `t4g.micro` uses 2 vCPUs and a new AWS account's per-region vCPU quota may be as low as 5, so large counts per region may fail at launch; setup then stops for that node and a re-run retries. `JOBS` (default 12) limits parallel work.
+- **Many nodes.** `bin/setup 100` with `REGIONS=na` puts nodes in the region with the fewest first, so they spread evenly; with several continents (`REGIONS=eu,na`) the continent with the fewest goes first and ties are random. The gateway routes at most 32 peers (the nodes plus the viewer), so more than 30 nodes needs `FORCE=1` and the extra peers will not be reachable. Each `t4g.micro` uses 2 vCPUs and a new AWS account's per-region vCPU quota may be as low as 5, so large counts per region may fail at launch; setup then stops for that node and a re-run retries. `JOBS` (default 12) limits parallel work.
 - **Public IPv4.** Instances use the default VPC with a public IPv4 address for outbound internet
   only; nothing can connect in. An IPv6-only variant needs IPv6 VPCs, an egress-only internet
   gateway and an S3 mirror for the binaries (GitHub and the `ec2messages` endpoint have no IPv6).

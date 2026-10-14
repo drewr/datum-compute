@@ -9,7 +9,7 @@
 #                                   spread over these regions (N defaults to one per region). Each entry
 #                                   (space or comma separated) is an AWS region or a continent alias that
 #                                   means every pool region there: na, sa, eu, ap (asia), me, af
-#   New nodes always go to the region with the fewest nodes, so N may exceed the number of regions.
+#   New nodes go to the continent with the fewest nodes, then the region with the fewest (ties at random), so N may exceed the number of regions.
 #   More than 30 nodes needs FORCE=1 (the gateway routes at most 32 peers). JOBS (default 12) caps parallel work.
 #
 # Needs: logged-in `aws` (see iam/operator.json for the permissions used) and `datumctl`
@@ -82,10 +82,23 @@ if [ "$total" -gt 30 ] && [ -z "${FORCE:-}" ]; then
   die "$total nodes is more than the gateway's peer routes allow (32 in all, counting the viewer); set FORCE=1 to try anyway"
 fi
 new=()
+# Spread over continents first, then over regions, breaking ties at random: REGIONS=eu,na with 5 nodes
+# gives 3+2 across the two, not five in whichever was listed first.
+continent_of() { case $1 in us-*|ca-*) echo na ;; *) echo "${1%%-*}" ;; esac; }
+declare -A ccnt=()
+for r in $cand; do c=$(continent_of "$r"); ccnt[$c]=$(( ${ccnt[$c]:-0} + cnt[$r] )); done
 for _ in $(seq "$to_add"); do
   best=
-  for r in $cand; do [ -n "$best" ] && [ "${cnt[$r]}" -ge "${cnt[$best]}" ] && continue; best=$r; done
+  # shellcheck disable=SC2086
+  for r in $(shuf -e $cand); do
+    if [ -n "$best" ]; then
+      bc=$(continent_of "$best"); rc=$(continent_of "$r")
+      [ "${ccnt[$rc]}" -lt "${ccnt[$bc]}" ] || { [ "${ccnt[$rc]}" -eq "${ccnt[$bc]}" ] && [ "${cnt[$r]}" -lt "${cnt[$best]}" ]; } || continue
+    fi
+    best=$r
+  done
   new+=("$best-${nextn[$best]:-0}")
+  c=$(continent_of "$best"); ccnt[$c]=$((ccnt[$c] + 1))
   cnt[$best]=$((cnt[$best] + 1)); nextn[$best]=$((${nextn[$best]:-0} + 1))
 done
 for r in $cand; do
