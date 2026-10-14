@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Deploy (or refresh) the jump host: one general-purpose instance on the fleet's network with a shell and
+# network tools (ping, traceroute, mtr, dig, curl, nc, ssh), for poking at the VPC from inside it.
+# bin/setup calls it at the end unless JUMP=0. Safe to re-run.
+#
+#   bin/jump            deploy it and print how to get a shell
+#   bin/jump --delete   remove it
+#
+# The image comes from jump/IMAGE (see jump/build.sh).
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+APP=${JUMP_NAME:-$FLEET-jump}
+
+if [ "${1:-}" = --delete ]; then
+  dc delete "workload/$APP" >/dev/null 2>&1 && say "deleted workload/$APP"
+  exit 0
+fi
+[ $# = 0 ] || die "usage: bin/jump [--delete]"
+
+IMAGE=${IMAGE:-$(cat "$DEMO_DIR/jump/IMAGE" 2>/dev/null)}
+[ -n "$IMAGE" ] || die "no image: run jump/build.sh (or set IMAGE=)"
+
+say "deploying $APP ($IMAGE)"
+dc apply -f - >/dev/null <<YAML || die "apply failed"
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: $APP
+  namespace: default
+spec:
+  placements:
+  - name: $GW_LOCATION
+    locations:
+    - name: $GW_LOCATION
+    scaleSettings:
+      minReplicas: 1
+  template:
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies: [IPv6]
+        network:
+          name: $NET
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ${PULL_SECRET:-ghcr-drewr}
+          containers:
+          - name: jump
+            image: $IMAGE
+            securityContext:
+              capabilities:
+                add: [NET_RAW]
+YAML
+
+say "waiting for the jump instance"
+inst= addr=
+for _ in $(seq 60); do
+  row=$(dc get instances -o json | jq -r --arg w "$APP" \
+    '[.items[] | select(.metadata.labels["compute.datumapis.com/workload-name"]==$w)][0] // empty
+     | "\(.metadata.name) \(first(.status.networkInterfaces[]?.assignments?.networkIP? // empty) // "" | sub("/.*";""))"')
+  read -r inst addr <<<"$row"
+  [ -n "$inst" ] && [ -n "$addr" ] && break; sleep 5
+done
+if [ -n "$inst" ]; then
+  say "jump instance $inst${addr:+ at $addr on $NET}"
+  say "shell: datumctl --project $PROJECT compute exec $inst -it -- sh"
+else
+  warn "no jump instance with an address yet; check: datumctl get instances (workload $APP)"
+fi

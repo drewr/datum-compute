@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remove everything bin/setup created for this fleet (FLEET_PREFIX + AWS user name, see lib/common.sh): instances, SGs, roles, profiles, SSM keys, Datum service
-# accounts/keys/bindings/connectors and the viewer. The Datum network and its gateway are kept, so the next
+# accounts/keys/bindings/connectors, the viewer and the jump host. The Datum network and its gateway are kept, so the next
 # setup reuses them: deleting a gateway leaves its quota claim behind, and only staff can clear that.
 #
 #   bin/teardown               the nodes in state/<fleet>/nodes.txt
@@ -47,6 +47,7 @@ for nd in $(nodes); do
   datum_down "$nd" "$bindings"
 done
 [ -n "${real_nodes:-}" ] || "$(dirname "$0")/visual" --delete
+[ -n "${real_nodes:-}" ] || "$(dirname "$0")/jump" --delete
 if [ "$DELNET" = 1 ] && [ -z "${real_nodes:-}" ]; then
   say "deleting gateway $GW and network $NET"
   # also any other gateway on this network, such as one a join created with a hash suffix

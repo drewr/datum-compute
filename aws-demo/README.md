@@ -14,6 +14,7 @@ bin/status               nodes, SSM state, the gateway, each member's address
 bin/quotacheck [--all]   the Datum quotas the demo uses, as used/total/percent, fullest first (--all: every quota)
 bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a region means its first node)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
+bin/jump [--delete]      deploy/refresh the jump host (one Alpine instance on the VPC with ping, traceroute, mtr, dig, curl, nc, ssh) and print the exec command
 bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
 bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
 bin/teardown [--net] [--purge]   delete the fleet (the network and gateway are kept for reuse; `--net` removes them); with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool. `bin/teardown us-east-1-0 ...` removes just those nodes and leaves the rest of the fleet, the network and the gateway alone; to move a node to another region, remove it that way and then `REGIONS=<region> bin/setup --add 1`
@@ -175,6 +176,20 @@ and a push mode (`MESH_PUSH_TOKEN`).
   private; the project needs an image pull secret (`PULL_SECRET`, default `ghcr-drewr`).
 - `VISUAL=0 bin/setup` skips it. `bin/visual --delete` removes it; `bin/teardown` does too.
   Re-run `bin/visual` after the fleet changes.
+
+## Jump host
+
+`bin/setup` also deploys `bin/jump`: a single general-purpose instance named `<fleet>-jump` on the fleet's
+network, running a small Alpine image (`jump/Dockerfile`: iputils `ping`, `traceroute`, `mtr`, `dig`,
+`curl`, `nc`, `ip`, and an `ssh` client). It prints the command for a shell inside the VPC:
+
+    datumctl --project <project> compute exec <fleet>-jump-us-east-1-us-east-1-0 -it -- sh
+
+- The container has `NET_RAW` so `traceroute` and `mtr` work in exec sessions; `ping` uses iputils
+  because BusyBox ping needs a raw socket. Egress from general-purpose instances is IPv6 only.
+- The image is built by `jump/build.sh` (pushes `ghcr.io/drewr/datum-jump`, pinned by digest in
+  `jump/IMAGE`; same pull secret as the viewer).
+- `JUMP=0 bin/setup` skips it. `bin/jump --delete` removes it; a fleet-wide `bin/teardown` does too.
 
 ## 9. Tearing down
 
