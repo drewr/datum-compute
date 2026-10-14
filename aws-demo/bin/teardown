@@ -1,28 +1,29 @@
 #!/usr/bin/env bash
 # Remove everything bin/setup created for this fleet (FLEET_PREFIX + AWS user name, see lib/common.sh): instances, SGs, roles, profiles, SSM keys, Datum service
-# accounts/keys/bindings/connectors, the gateway and the network.
+# accounts/keys/bindings/connectors and the viewer. The Datum network and its gateway are kept, so the next
+# setup reuses them: deleting a gateway leaves its quota claim behind, and only staff can clear that.
 #
 #   bin/teardown               the nodes in state/<fleet>/nodes.txt
 #   REGIONS="a b" bin/teardown  with no state: find this fleet's instances in those regions
 #   bin/teardown us-east-1-0 ...   exactly these nodes; the rest of the fleet, the network and the gateway stay
+#   bin/teardown --net         also delete the network and gateway (their quota claim then needs staff to clear)
 #   bin/teardown --purge       also delete the shared permissions boundary policy
-#   KEEP_NET=1 bin/teardown    remove the fleet only; keep the network, gateway and viewer
 . "$(dirname "$0")/../lib/common.sh"
 preflight
-PURGE=0 NODES=
+PURGE=0 DELNET=0 NODES=
 for a in "$@"; do
   case $a in
     --purge) PURGE=1 ;;
-    -*) die "usage: bin/teardown [--purge] [NODE...]" ;;
+    --net) DELNET=1 ;;
+    -*) die "usage: bin/teardown [--net] [--purge] [NODE...]" ;;
     *-[0-9]*-[0-9]*) NODES="$NODES $a" ;;
-    *) die "'$a' is not a node name like us-east-1-0 (usage: bin/teardown [--purge] [NODE...])" ;;
+    *) die "'$a' is not a node name like us-east-1-0 (usage: bin/teardown [--net] [--purge] [NODE...])" ;;
   esac
 done
 if [ -n "$NODES" ]; then
   # work on a partial list so the fleet's own nodes.txt keeps its other nodes; the network stays
   real_nodes=$nodes_file; nodes_file=$STATE_DIR/nodes.partial
   tr ' ' '\n' <<<"$NODES" | sed '/^$/d' >"$nodes_file"
-  KEEP_NET=1
 elif [ ! -s "$nodes_file" ]; then
   # no state file: find the fleet's instances in REGIONS (names or continents), else in every pool region
   for r in $(expand_regions "${REGIONS:-$POOL}" || exit 1); do
@@ -45,8 +46,8 @@ for nd in $(nodes); do
   say "$nd: Datum teardown"
   datum_down "$nd" "$bindings"
 done
-if [ -z "${KEEP_NET:-}" ]; then
-  "$(dirname "$0")/visual" --delete
+[ -n "${real_nodes:-}" ] || "$(dirname "$0")/visual" --delete
+if [ "$DELNET" = 1 ] && [ -z "${real_nodes:-}" ]; then
   say "deleting gateway $GW and network $NET"
   # also any other gateway on this network, such as one a join created with a hash suffix
   for g in $(dc get connectgateways -o json 2>/dev/null | jq -r --arg net "$NET" '.items[] | select(.spec.networkRef==$net) | .metadata.name') "$GW"; do
@@ -54,7 +55,8 @@ if [ -z "${KEEP_NET:-}" ]; then
   done
   dc delete networks "$NET" >/dev/null 2>&1
 fi
-warn "check for leftover ConnectGateway quota claims (README, 'Quota'); they need a staff identity to delete"
+if [ "$DELNET" = 1 ]; then warn "deleting the gateway left its quota claim behind (README, 'Quota'); it needs a staff identity to delete"
+elif [ -z "${real_nodes:-}" ]; then say "kept network $NET and its gateway for the next setup (bin/teardown --net deletes them)"; fi
 
 wait
 if [ "$PURGE" = 1 ]; then
@@ -64,5 +66,5 @@ fi
 if [ -n "${real_nodes:-}" ]; then
   [ ! -f "$real_nodes" ] || { grep -vxFf "$nodes_file" "$real_nodes" >"$real_nodes.new"; mv "$real_nodes.new" "$real_nodes"; }
   rm -f "$nodes_file"
-elif [ -n "${KEEP_NET:-}" ]; then rm -f "$nodes_file"; else find "$STATE_DIR" -mindepth 1 -not -name bad-names -delete; fi
+elif [ "$DELNET" != 1 ]; then rm -f "$nodes_file"; else find "$STATE_DIR" -mindepth 1 -not -name bad-names -delete; fi
 say "done"

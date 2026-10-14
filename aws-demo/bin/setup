@@ -99,6 +99,12 @@ done
 say "nodes: $(nodes | wc -l) in $(regions | wc -l) regions; new: ${new[*]:-none}"
 
 # ---- 1. Datum: network + gateway -------------------------------------------------------------
+if [ -z "$NET_FIXED" ] && [ ! -s "$STATE_DIR/net" ] && [ -z "$(gateway_for_net)" ]; then
+  # no gateway here yet: reuse an idle one from an earlier fleet rather than spend quota on another
+  old=$(adoptable_net)
+  if [ -n "$old" ]; then say "adopting the idle network $old and its gateway from an earlier fleet"; NET=$old; export NET; fi
+fi
+printf '%s\n' "$NET" >"$STATE_DIR/net"
 if ! dc get networks "$NET" >/dev/null 2>&1; then
   say "creating Network $NET"
   dc create --validate=false -f - <<Y

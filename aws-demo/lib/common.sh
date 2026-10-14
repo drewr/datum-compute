@@ -31,11 +31,16 @@ set_fleet() {
   # FLEET (drewr-demo261009-b) live under that root rather than under /<fleet>/.
   case $arn in *:user/*) KEY_ROOT=$base ;; *) KEY_ROOT=$FLEET ;; esac
   [ "${#FLEET}" -le 40 ] || die "fleet name $FLEET is longer than 40 characters; set a shorter FLEET_PREFIX or FLEET"
-  NET=${NET:-$FLEET-net}                          # Datum Network (VPC) for the fleet
   STATE_DIR=${STATE_DIR:-$DEMO_DIR/state/$FLEET}
   mkdir -p "$STATE_DIR/logs"
+  # Datum Network (VPC) for the fleet: NET if set, else the one setup chose (state/<fleet>/net, which
+  # may be an earlier fleet's network it adopted), else <fleet>-net
+  NET_FIXED=${NET:+1}
+  if [ -z "${NET:-}" ]; then
+    if [ -s "$STATE_DIR/net" ]; then NET=$(<"$STATE_DIR/net"); else NET=$FLEET-net; fi
+  fi
   nodes_file=$STATE_DIR/nodes.txt
-  export FLEET NET STATE_DIR KEY_ROOT
+  export FLEET NET NET_FIXED STATE_DIR KEY_ROOT
 }
 
 preflight() {
@@ -139,6 +144,16 @@ denied_regions() {
 gateway_for_net() {
   dc get connectgateways -o json 2>/dev/null | jq -r --arg n "$NET" --arg l "$GW_LOCATION" --arg want "connect-$NET-$GW_LOCATION" \
     '[.items[] | select(.spec.networkRef==$n and .spec.locationRef==$l) | .metadata.name] | (map(select(.==$want)) + .)[0] // empty'
+}
+
+# adoptable_net -> an idle network of this operator's earlier fleets (named <user>-*-net) whose gateway at
+# $GW_LOCATION has no members bound to it; empty if none. Deleting a gateway leaks its quota claim
+# (only staff can clear it), so a gateway that already exists is worth reusing under a new fleet name.
+adoptable_net() {
+  local bound
+  bound=$(dc get connectnetworkbindings -o json 2>/dev/null | jq -r '[.items[].spec.gatewayRef] | unique | join(" ")')
+  dc get connectgateways -o json 2>/dev/null | jq -r --arg p "$KEY_ROOT-" --arg l "$GW_LOCATION" --arg bound "$bound" \
+    '($bound | split(" ")) as $b | [.items[] | select(.spec.locationRef==$l and (.spec.networkRef | startswith($p) and endswith("-net")) and ([.metadata.name] | inside($b) | not)) | .spec.networkRef][0] // empty'
 }
 
 # throttle: wait until fewer than ${JOBS:-12} background jobs are running

@@ -14,7 +14,7 @@ bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a re
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
 bin/bootstrap-iam        one-time, as an AWS admin: create the operator user and local profile
-bin/teardown [--purge]   delete everything setup created; with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool (KEEP_NET=1 keeps the network, gateway and viewer). `bin/teardown us-east-1-0 ...` removes just those nodes and leaves the rest of the fleet, the network and the gateway alone; to move a node to another region, remove it that way and then `REGIONS=<region> bin/setup --add 1`
+bin/teardown [--net] [--purge]   delete the fleet (the network and gateway are kept for reuse; `--net` removes them); with no state file it looks for the fleet in REGIONS (names or continents) or the whole pool. `bin/teardown us-east-1-0 ...` removes just those nodes and leaves the rest of the fleet, the network and the gateway alone; to move a node to another region, remove it that way and then `REGIONS=<region> bin/setup --add 1`
 ```
 
 You need `aws` and `datumctl` logged in, plus `jq` and, for `bin/login`, `session-manager-plugin`. `nix develop` (see `flake.nix`) provides everything except `datumctl`, which is not in nixpkgs; `bin/login` and `bin/netcheck` also fetch the plugin with nix-shell if it is missing.
@@ -205,10 +205,14 @@ shared permissions boundary policy. The original network and gateway in the proj
   them needs a staff identity (`datumctl auth switch <staff user>`, then `--project <project>`).
   The controller stops an idle gateway's workload (phase `Dormant`) but never deletes the gateway, so
   dormant gateways still count. If `bin/setup` hits the quota it lists the project's gateways with
-  their network and phase; delete one that is not in use. `bin/teardown` removes every gateway on its
-  own network, including ones a `join` created with a hash suffix.
+  their network and phase; delete one that is not in use. `bin/teardown` keeps the network and gateway
+  (deleting a gateway leaks its quota claim, which only staff can clear); `bin/teardown --net` removes
+  them, including ones a `join` created with a hash suffix.
   `bin/setup` reuses a gateway already on its network at `GW_LOCATION` (the conventional name first, else
-  any, such as a hash-suffixed one) and logs `reusing ConnectGateway`; it creates one only if none exists.
+  any, such as a hash-suffixed one) and logs `reusing ConnectGateway`. A new fleet name has no network
+  yet, so setup first adopts an idle network of yours (`<user>-*-net` with a gateway at `GW_LOCATION`
+  and no members bound) and records the choice in `state/<fleet>/net`; it creates a gateway only if
+  there is nothing to adopt. Set `NET` to pick a network yourself.
 - **Broad binding.** The service accounts hold `editor`. Push for a narrow connect role before any
   use outside staging. Teardown removes the bindings.
 - **Many nodes.** `bin/setup 100` with `REGIONS=na` puts nodes in the region with the fewest first, so they spread evenly. The gateway routes at most 32 peers (the nodes plus the viewer), so more than 30 nodes needs `FORCE=1` and the extra peers will not be reachable. Each `t4g.micro` uses 2 vCPUs and a new AWS account's per-region vCPU quota may be as low as 5, so large counts per region may fail at launch; setup then stops for that node and a re-run retries. `JOBS` (default 12) limits parallel work.
