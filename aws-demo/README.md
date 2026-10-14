@@ -10,7 +10,7 @@ bin/setup --add [N]     add N more nodes (default 3)
 REGIONS="eu ap-southeast-1" bin/setup 10   spread 10 nodes over these regions (space or comma separated); an entry is an
                         AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there (the default pool is 17 regions; set `POOL` to change it). Setup probes the regions first and leaves out any the operator policy denies, with a warning
 bin/status               nodes, SSM state, the gateway, each member's address
-bin/quotacheck [--all]   the Datum quotas the demo uses, as used/total (--all: every quota)
+bin/quotacheck [--all]   the Datum quotas the demo uses, as used/total/percent, fullest first (--all: every quota)
 bin/netcheck [NODE|REGION]   netcheck on one instance (random node if none; a region means its first node)
 bin/visual               deploy/refresh the visual netcheck (a map of the fleet) and print its URL
 bin/login NODE|REGION [cmd]   shell (or one command) on a node, e.g. bin/login eu-west-2-1 netcheck
