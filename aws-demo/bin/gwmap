@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Let instances in the VPC (the jump host, any workload) reach the fleet's nodes. The VPC router has no
+# route for a connector's own address, so an instance's packets to it are lost. The gateway can reach
+# every member, and it owns a whole /96 of the VPC, so this gives each member an alias address in the
+# gateway's /96 and DNATs the alias to the member. Instances then use the alias in place of the member's
+# address (ping, ssh, curl). Idempotent: each run rebuilds the table and the aliases.
+#
+#   bin/gwmap          apply, and print "connector alias" lines (also saved to state/<fleet>/gw-aliases)
+#   bin/gwmap --clear  remove the aliases and the table
+#   bin/gwmap --check  exit 0 if the gateway has every alias, 1 if it needs (re)applying
+#   bin/gwmap --watch [SECS]   check every SECS (default 30) and re-apply when a check fails, here in the
+#                      foreground. The jump host runs the same watcher on its own (see bin/jump).
+#
+# The config lives in the gateway's network namespace only, so a gateway restart loses it. The gateway is
+# owned by the connect controller, so nothing on it can be made to persist; bin/setup and bin/jump re-run
+# this, and the watcher on the jump host heals it between runs. The script is files/gwmap.sh. Aliases are
+# numbered by sorted connector name (::101, ::102, ...), so a resize renumbers them; always read gw-aliases.
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+export PROJECT FLEET NET GW_LOCATION
+GW=$(gateway_for_net); [ -z "$GW" ] || export GW
+if [ "${1:-}" = --check ] || [ "${1:-}" = --watch ] || [ "${1:-}" = --clear ]; then
+  [ "$1" = --clear ] && rm -f "$STATE_DIR/gw-aliases"
+  exec bash "$DEMO_DIR/files/gwmap.sh" "$@"
+fi
+[ $# = 0 ] || die "usage: bin/gwmap [--clear | --check | --watch [SECS]]"
+out=$(bash "$DEMO_DIR/files/gwmap.sh") || exit 1
+printf '%s' "$out" >"$STATE_DIR/gw-aliases"
+printf '%s' "$out"

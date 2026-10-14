@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture · Global Mesh</title>
+<style>
+  :root { --bg:#f6f6f4; --ink:#1c2b2a; --mute:#6b7775; --line:#c9cfcc; --card:#fff; --aws:#b8620a; --datum:#3b6b2a; --accent:#2a5a8a; --soft:#eef2ee; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141a19; --ink:#e6ecea; --mute:#93a09d; --line:#3a4644; --card:#1b2322; --aws:#e59a4a; --datum:#8fc97a; --accent:#7fb2e5; --soft:#202a28; } }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 system-ui, sans-serif; }
+  header { display:flex; gap:16px; align-items:baseline; padding:20px 24px 4px; flex-wrap:wrap; }
+  header h1 { font-size:22px; font-weight:500; margin:0; }
+  header a { color:var(--accent); text-decoration:none; font-size:13px; }
+  p.lede { margin:4px 24px 12px; color:var(--mute); max-width:900px; }
+  svg { width:100%; height:auto; display:block; max-width:1240px; margin:0 auto; }
+  .box { fill:var(--card); stroke:var(--line); stroke-width:1.2; }
+  .zone { fill:var(--soft); stroke:var(--line); stroke-dasharray:5 4; }
+  .t { fill:var(--ink); font-size:13px; } .s { fill:var(--mute); font-size:11px; } .h { fill:var(--ink); font-size:14px; font-weight:600; }
+  .awsz { stroke:var(--aws); } .datz { stroke:var(--datum); }
+  .arrow { stroke:var(--accent); stroke-width:1.6; fill:none; marker-end:url(#a); }
+  .arrow.dash { stroke-dasharray:6 4; } .arrow.ctl { stroke:var(--mute); }
+  .lbl { fill:var(--accent); font-size:11px; }
+  ul.notes { max-width:1100px; margin:8px auto 40px; padding:0 24px 0 44px; color:var(--mute); }
+  ul.notes b { color:var(--ink); font-weight:600; }
+</style>
+</head>
+<body>
+<header><h1>Architecture</h1><a href="/">&larr; back to the live map</a></header>
+<p class="lede">Instances in AWS regions join one private Datum network over iroh. A Datum compute instance on that network draws them. The count below is the live fleet size.</p>
+<svg id="d" viewBox="0 0 1200 700" role="img" aria-label="Architecture diagram"></svg>
+<ul class="notes">
+  <li><b>Join.</b> Each instance runs the Datum Connect daemon as a service account, enrols as a connector and joins <code>aws-test-net</code> through one gateway in us-east-1 (QUIC, relayed when it cannot go direct).</li>
+  <li><b>Hub and spoke.</b> Members only reach peers on the same gateway, so traffic between two instances goes through it. Latencies on the map are measured over this path.</li>
+  <li><b>Push, not pull.</b> The viewer cannot route to members' addresses, so each member measures its peers and POSTs a report to the viewer on the VPC.</li>
+  <li><b>Management.</b> No SSH and no inbound ports on the instances: access is AWS Systems Manager; the service-account key lives in SSM Parameter Store and is deleted from the instance after enrolment.</li>
+</ul>
+<script>
+const NS = 'http://www.w3.org/2000/svg', svg = document.getElementById('d');
+const el = (n, a = {}, text) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (text != null) e.textContent = text; return e; };
+const add = (...n) => n.forEach(x => svg.appendChild(x));
+const box = (x, y, w, h, cls = 'box') => el('rect', { x, y, width: w, height: h, rx: 8, class: cls });
+const text = (x, y, s, cls = 't', anchor = 'start') => el('text', { x, y, class: cls, 'text-anchor': anchor }, s);
+const arrow = (d, cls = '') => el('path', { d, class: 'arrow ' + cls });
+
+function draw(regions) {
+  svg.replaceChildren();
+  const H = 620, n = regions.length, top = 70, rowH = 62;
+  svg.setAttribute('viewBox', `0 0 1200 ${H}`);
+  add(el('defs', {}));
+  svg.firstChild.innerHTML = '<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--accent)"/></marker>';
+
+  // AWS zone: two instances, dots, one more, and the live count
+  add(box(20, 20, 330, H - 40, 'zone awsz'), text(36, 46, 'AWS account · one instance per region', 'h'));
+  const inst = i => {
+    const r = regions[i], y = i === 2 ? top + 2 * rowH + 100 : top + i * rowH;
+    add(box(36, y, 298, rowH - 10), text(48, y + 20, r ? (r.city ? `${r.city} · ${r.region}` : r.region) : 'EC2 instance', 't'),
+        text(48, y + 37, 't4g.micro · Datum Connect daemon · responder', 's'));
+  };
+  inst(0); inst(1);
+  const dy = top + 2 * rowH + 20;
+  [0, 1, 2].forEach(k => add(el('circle', { cx: 185, cy: dy + k * 20, r: 3.5, style: 'fill:var(--mute)' })));
+  inst(2);
+  add(text(185, 400, n ? String(n) : '…', 'h', 'middle'), text(185, 420, n === 1 ? 'instance in the fleet' : 'instances in the fleet', 's', 'middle'));
+  const awsMidY = H / 2;
+
+  // Datum Connect zone
+  add(box(430, 20, 330, 300, 'zone datz'), text(446, 46, 'Datum Connect (staging)', 'h'));
+  add(box(446, 66, 298, 52), text(458, 86, 'iroh relays', 't'), text(458, 103, 'us-central-1 · us-east-1 (QUIC fallback)', 's'));
+  add(box(446, 134, 298, 70), text(458, 154, 'Gateway · connect-aws-test-net-us-east-1', 't'), text(458, 171, 'peerRouting: members meet here (hub and spoke)', 's'), text(458, 188, 'one gateway in us-east-1', 's'));
+  add(box(446, 220, 298, 84), text(458, 240, 'Control plane (Datum API)', 't'), text(458, 257, 'service account + key per instance', 's'), text(458, 272, 'connector · network binding · policy binding', 's'), text(458, 287, 'network aws-test-net  fd20:0:2e::/48', 's'));
+
+  // VPC zone: viewer
+  add(box(840, 20, 340, 300, 'zone datz'), text(856, 46, 'Datum VPC · aws-test-net', 'h'));
+  add(box(856, 66, 308, 96), text(868, 86, 'Viewer instance (general-purpose)', 't'), text(868, 103, 'workload aws-mesh-viewer · us-east-1', 's'), text(868, 118, 'Go + React · collects pushed reports', 's'), text(868, 133, 'POST /mesh/report (token) · GET /api/mesh', 's'));
+  add(box(856, 176, 308, 62), text(868, 196, 'Image', 't'), text(868, 213, 'ghcr.io/drewr/global-mesh-aws (digest-pinned)', 's'), text(868, 228, 'pulled with an image pull secret', 's'));
+  add(box(856, 252, 308, 54), text(868, 272, 'NetworkService + HTTPProxy', 't'), text(868, 289, 'public HTTPS entry, in front of the viewer', 's'));
+
+  // Management and browser
+  add(box(430, 350, 330, 90, 'zone'), text(446, 374, 'AWS Systems Manager', 'h'), text(446, 394, 'Run Command / Session Manager: no SSH, no inbound', 's'), text(446, 410, 'Parameter Store: service-account key (SecureString)', 's'));
+  add(box(840, 350, 340, 70), text(856, 376, 'Browser', 'h'), text(856, 396, 'you: the live map, and this page', 's'));
+
+  // arrows
+  const ax = 334;
+  add(arrow(`M${ax} ${awsMidY - 30} C 390 ${awsMidY - 30}, 390 169, 446 169`), text(346, awsMidY - 38, 'iroh / QUIC', 'lbl'));
+  add(arrow('M744 169 L 856 114'), text(772, 130, 'VPC', 'lbl'));
+  add(arrow(`M${ax} ${awsMidY + 10} C 380 ${awsMidY + 10}, 390 395, 430 395`, 'ctl dash'), text(346, awsMidY + 28, 'SSM', 'lbl'));
+  add(arrow('M1010 350 L 1010 308'), text(1020, 334, 'HTTPS', 'lbl'));
+  add(arrow('M1180 279 C 1196 279, 1196 114, 1164 114', 'ctl dash'));
+  add(el('path', { d: 'M600 204 L 600 220', class: 'arrow ctl' }));
+}
+
+async function load() {
+  try {
+    const v = await (await fetch('/api/mesh')).json();
+    const regions = (v.instances || []).filter(i => /^aws-/.test(i.name))
+      .map(i => ({ region: i.name.replace(/^aws-/, '').replace(/-\d+$/, ''), city: i.city && !/^aws-/.test(i.city) ? i.city : '' }))
+      .sort((a, b) => a.region.localeCompare(b.region));
+    draw(regions);
+  } catch (e) { draw([]); }
+}
+draw([]); load(); setInterval(load, 15000);
+</script>
+</body>
+</html>

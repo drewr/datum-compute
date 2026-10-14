@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# bin/netcheck [NODE|REGION]   run netcheck on one instance (a random node if none given).
+. "$(dirname "$0")/../lib/common.sh"
+set_fleet
+x=${1:-$(nodes | shuf -n1)}
+[ -n "$x" ] || die "no nodes; run bin/setup first"
+nd=$(resolve_node "$x") || exit 1
+say "netcheck on $nd"
+exec "$DEMO_DIR/bin/login" "$nd" netcheck

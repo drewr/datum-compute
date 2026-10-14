@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Deploy (or refresh) the jump host: one general-purpose instance on the fleet's network with a shell and
+# network tools (ping, traceroute, mtr, dig, curl, nc, ssh) and netcheck in /root, for poking at the VPC
+# from inside it. Every run refreshes netcheck and its member list, as bin/setup does for the nodes.
+# bin/setup calls it at the end unless JUMP=0. Safe to re-run.
+#
+#   bin/jump            deploy it and print how to get a shell
+#   bin/jump --delete   remove it
+#
+# The image comes from jump/IMAGE (see jump/build.sh).
+. "$(dirname "$0")/../lib/common.sh"
+preflight
+APP=${JUMP_NAME:-$FLEET-jump}
+
+if [ "${1:-}" = --delete ]; then
+  dc delete "workload/$APP" >/dev/null 2>&1 && say "deleted workload/$APP"
+  dco delete policybindings "$APP-editor" -n "organization-$ORG" >/dev/null 2>&1
+  dc delete serviceaccountkeys "$APP-key" >/dev/null 2>&1
+  dc delete serviceaccounts "$APP" >/dev/null 2>&1 && say "deleted the jump service account"
+  exit 0
+fi
+[ $# = 0 ] || die "usage: bin/jump [--delete]"
+
+IMAGE=${IMAGE:-$(cat "$DEMO_DIR/jump/IMAGE" 2>/dev/null)}
+[ -n "$IMAGE" ] || die "no image: run jump/build.sh (or set IMAGE=)"
+
+say "deploying $APP ($IMAGE)"
+dc apply -f - >/dev/null <<YAML || die "apply failed"
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  name: $APP
+  namespace: default
+spec:
+  placements:
+  - name: $GW_LOCATION
+    locations:
+    - name: $GW_LOCATION
+    scaleSettings:
+      minReplicas: 1
+  template:
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies: [IPv6]
+        network:
+          name: $NET
+      runtime:
+        class: general-purpose
+        resources:
+          instanceType: datumcloud/d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: ${PULL_SECRET:-ghcr-drewr}
+          containers:
+          - name: jump
+            image: $IMAGE
+            securityContext:
+              capabilities:
+                add: [NET_RAW]
+YAML
+
+say "waiting for the jump instance"
+inst= addr=
+for _ in $(seq 60); do
+  row=$(dc get instances -o json | jq -r --arg w "$APP" \
+    '[.items[] | select(.metadata.labels["compute.datumapis.com/workload-name"]==$w)][0] // empty
+     | "\(.metadata.name) \(first(.status.networkInterfaces[]?.assignments?.networkIP? // empty) // "" | sub("/.*";""))"')
+  read -r inst addr <<<"$row"
+  [ -n "$inst" ] && [ -n "$addr" ] && break; sleep 5
+done
+if [ -z "$inst" ]; then
+  warn "no jump instance with an address yet; check: datumctl get instances (workload $APP)"
+  exit 0
+fi
+say "jump instance $inst${addr:+ at $addr on $NET}"
+
+# netcheck and its member list go in over exec (there is no SSM here); retry while the agent starts
+GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
+members=$("$DEMO_DIR/bin/gwmap" 2>/dev/null | grep -E '^[^ ]+ [0-9a-f:]+$')
+[ -n "$members" ] || warn "no gateway aliases; netcheck cannot measure members from here (bin/gwmap)"
+script=$STATE_DIR/jump-netcheck.sh
+{
+  echo 'cat > /root/netcheck <<'"'NETCHECK_EOF'"
+  cat "$DEMO_DIR/files/netcheck"
+  echo NETCHECK_EOF
+  echo 'chmod 755 /root/netcheck'
+  printf 'printf "%%s\n" %q %q %q %q %q %q %q > /etc/netcheck.conf\n' "PROJECT=$PROJECT" "FLEET=$FLEET" "JUMP=$inst" "NET=$NET" "VPC_ADDR=$addr" "GW=$GW" "LOC=$GW_LOCATION"
+  printf 'cat > /etc/netcheck-members <<%s\n%s\nMEMBERS_EOF\n' "'MEMBERS_EOF'" "$members"
+} >"$script"
+ok=
+for _ in $(seq 12); do
+  datumctl compute exec "$inst" -i --project "$PROJECT" -- sh <"$script" >/dev/null 2>&1 && { ok=1; break; }; sleep 10
+done
+rm -f "$script"
+if [ -z "$ok" ]; then warn "could not install netcheck on $inst; re-run bin/jump"
+elif [ -n "$members" ]; then say "netcheck installed in /root with $(grep -c . <<<"$members") members"
+else say "netcheck installed in /root, no members yet; re-run bin/jump after the joins settle"; fi
+say "shell: datumctl compute exec $inst -it --project $PROJECT -- sh   (then: netcheck)"
+
+# The gateway alias watcher: bin/gwmap's script, run here with the jump's own service account so the
+# aliases come back after a gateway restart without anyone running anything. GWWATCH=0 skips it.
+[ -n "$ok" ] && [ "${GWWATCH:-1}" != 0 ] || exit 0
+n=$APP
+dc get serviceaccounts "$n" >/dev/null 2>&1 || create_sa "$n"
+uid= email=
+for _ in $(seq 30); do
+  uid=$(dc get serviceaccounts "$n" -o jsonpath='{.metadata.uid}' 2>/dev/null)
+  email=$(dc get serviceaccounts "$n" -o jsonpath='{.status.email}' 2>/dev/null)
+  [ -n "$uid" ] && [ -n "$email" ] && break; sleep 2
+done
+[ -n "$uid" ] && [ -n "$email" ] || { warn "service account $n is not ready; re-run bin/jump to start the watcher"; exit 0; }
+dco get policybindings "$n-editor" -n "organization-$ORG" >/dev/null 2>&1 || create_binding "$n" "$uid"
+jexec() { datumctl compute exec "$inst" -i --project "$PROJECT" -- "$@"; }
+script=$STATE_DIR/jump-watch.sh; (umask 077; : >"$script")
+if ! jexec test -s /root/.datum/cred.json >/dev/null 2>&1; then
+  key=$(mint_key "$n" "$email")
+  if [ -z "$key" ] || [ "$key" = null ]; then warn "could not create a key for $n; no watcher"; rm -f "$script"; exit 0; fi
+  {
+    echo 'umask 077; mkdir -p /root/.datum; cat > /root/.datum/cred.json <<'"'CRED_EOF'"
+    jq --arg p "$PROJECT" --arg a "$API_ENDPOINT" --arg t "$TOKEN_URI" '. + {project_id:$p, api_endpoint:$a, token_uri:$t}' <<<"$key"
+    echo CRED_EOF
+  } >"$script"; key=
+  for _ in $(seq 6); do jexec sh <"$script" >/dev/null 2>&1 && break; sleep 5; done
+fi
+auth_host=${TOKEN_URI#*://}; auth_host=${auth_host%%/*}; api_host=${API_ENDPOINT#*://}
+{
+  echo 'cat > /root/gwmap.sh <<'"'GWMAP_EOF'"
+  cat "$DEMO_DIR/files/gwmap.sh"
+  echo GWMAP_EOF
+  echo 'chmod 755 /root/gwmap.sh'
+  printf 'printf "%%s\n" %q %q %q %q %q %q > /etc/gwwatch.env\n' "export PROJECT=$PROJECT" "export FLEET=$FLEET" "export NET=$NET" "export GW_LOCATION=$GW_LOCATION" "export GW=$GW" "export MEMBERS_FILE=/etc/netcheck-members"
+  echo "datumctl login --credentials /root/.datum/cred.json --hostname $auth_host --api-hostname $api_host >/dev/null 2>&1 || echo LOGIN_FAILED"
+  echo "datumctl plugin trust compute >/dev/null 2>&1"
+  echo "pkill -f 'gwmap.sh --watch' 2>/dev/null"
+  echo '(. /etc/gwwatch.env; setsid nohup bash /root/gwmap.sh --watch 30 >>/var/log/gwwatch.log 2>&1 </dev/null &) ; sleep 1; pgrep -f "gwmap.sh --watch" >/dev/null && echo WATCHING'
+} >"$script"
+res=
+for _ in $(seq 6); do res=$(jexec sh <"$script" 2>&1) && break; sleep 5; done
+rm -f "$script"
+case $res in
+  *LOGIN_FAILED*) warn "the watcher could not log in as $n; re-run bin/jump" ;;
+  *WATCHING*) say "gateway alias watcher running on $inst (log: /var/log/gwwatch.log)" ;;
+  *) warn "the watcher did not start on $inst; re-run bin/jump" ;;
+esac

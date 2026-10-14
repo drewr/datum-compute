@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Report the project's Datum quotas that the demo consumes, as used/total, so you can see headroom
+# before bin/setup. Read-only; needs no AWS access. Uses the active datumctl context (set PROJECT to
+# override the project).
+#
+#   bin/quotacheck          the quotas the demo uses
+#   bin/quotacheck --all    every quota the project has
+#
+# Sorted by percent used, highest first. Lines at 80% or more are marked "!" (100% is "!!").
+# A fleet needs about 1 gateway, 2 instances and workloads, 3 ipclaims, 1 httpproxy/gateway/
+# httproute/endpointslice (the viewer) and 2-3 secrets. Nodes are not metered, but
+# networking.datumapis.com/connectors has a small limit.
+. "$(dirname "$0")/../lib/common.sh"
+need datumctl jq
+case "${1:-}" in ""|--all) ;; *) die "usage: bin/quotacheck [--all]" ;; esac
+
+json=$(timeout 60 datumctl ${PROJECT:+--project "$PROJECT"} get allowancebuckets -A -o json 2>&1) || die "cannot read quotas: $(tail -1 <<<"$json")"
+
+jq -r --arg all "${1:-}" '
+  ["connect.datumapis.com/connectgateways","networking.datumapis.com/connectors",
+   "compute.datumapis.com/instances","compute.datumapis.com/workloads",
+   "compute.datumapis.com/vcpus","compute.datumapis.com/memory",
+   "ipam.miloapis.com/ipclaims",
+   "networking.datumapis.com/httpproxies","gateway.networking.k8s.io/gateways",
+   "gateway.networking.k8s.io/httproutes","discovery.k8s.io/endpointslices",
+   "core.miloapis.com/secrets","core.miloapis.com/configmaps"] as $demo
+  | [.items[] | {t: .spec.resourceType, used: (.status.allocated // 0), total: (.status.limit // 0)}]
+  | (if $all == "--all" then . else [ $demo[] as $d | .[] | select(.t == $d) ] end)
+  | map(. + {pct: (if .total == 0 then 0 else (.used * 100 / .total) end)})
+  | sort_by(-.pct, .t)
+  | .[]
+  | (if .total == 0 then "" elif .used >= .total then "!!" elif .used * 5 >= .total * 4 then "!" else "" end) as $m
+  | "\(.t)\t\(.used)/\(.total)\t\(.pct | floor)%\t\($m)"' <<<"$json" | column -t -s "$(printf '\t')"
