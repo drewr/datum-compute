@@ -2,6 +2,7 @@
 // results into the page from ../page.ts. Bundled by esbuild into dist/client.js.
 import SpeedTest, { type MeasurementConfig, type Results } from "@cloudflare/speedtest";
 import { geoGraticule10, geoMercator, geoPath } from "d3-geo";
+import { area, curveMonotoneX, line } from "d3-shape";
 import { feature } from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
 import land110 from "world-atlas/land-110m.json";
@@ -71,28 +72,34 @@ function setLoaded(id: string, down: string | undefined, up: string | undefined)
 
 // --- charts -------------------------------------------------------------------
 
-// One dot per request, in order, joined by a line; the dashed line is the
-// reported result. Points are colored by the file size they came from.
-function drawChart(el: HTMLElement, points: { bps: number; bytes: number }[], result: number | undefined): void {
+// An area chart of the per-request rates in order, like speed.cloudflare.com:
+// a smooth line with the area under it filled, strongest under the line and
+// fading toward the baseline. The dashed line is the reported result.
+function drawChart(el: HTMLElement, points: { bps: number }[], result: number | undefined): void {
   if (!points.length) {
     el.innerHTML = "";
     return;
   }
   const w = el.clientWidth || 300;
   const h = el.clientHeight || 60;
-  const pad = 4;
-  const max = Math.max(...points.map((p) => p.bps), result ?? 0) * 1.15;
-  const x = (i: number) => pad + (points.length === 1 ? (w - 2 * pad) / 2 : (i * (w - 2 * pad)) / (points.length - 1));
-  const y = (v: number) => h - pad - (v / max) * (h - 2 * pad);
-  const sizes = [...new Set(points.map((p) => p.bytes))].sort((a, b) => a - b);
-  const opacity = (bytes: number) => 0.35 + (0.65 * (sizes.indexOf(bytes) + 1)) / sizes.length;
-  const line = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.bps).toFixed(1)}`).join("");
-  const r = h > 100 ? 3 : 2;
+  const top = 4;
+  const max = Math.max(...points.map((p) => p.bps), result ?? 0) * 1.1;
+  // One point still draws a flat band across the chart.
+  const data = points.length === 1 ? [points[0], points[0]] : points;
+  const x = (i: number) => (i * w) / (data.length - 1);
+  const y = (v: number) => h - (v / max) * (h - top);
+  const curve = line<{ bps: number }>().x((_, i) => x(i)).y((p) => y(p.bps)).curve(curveMonotoneX);
+  const fill = area<{ bps: number }>().x((_, i) => x(i)).y0(h).y1((p) => y(p.bps)).curve(curveMonotoneX);
+  const gradient = `fill-${el.parentElement?.id ?? "chart"}`;
   el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Per-request rates">
-    <line class="track" x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}"/>
-    ${result ? `<line class="result" x1="0" x2="${w}" y1="${y(result)}" y2="${y(result)}" stroke="currentColor"/>` : ""}
-    <path d="${line}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" opacity=".55"/>
-    ${points.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.bps).toFixed(1)}" r="${r}" fill="currentColor" opacity="${opacity(p.bytes).toFixed(2)}"/>`).join("")}
+    <defs><linearGradient id="${gradient}" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="currentColor" stop-opacity=".45"/>
+      <stop offset="1" stop-color="currentColor" stop-opacity=".04"/>
+    </linearGradient></defs>
+    <path d="${fill(data) ?? ""}" fill="url(#${gradient})"/>
+    <path d="${curve(data) ?? ""}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    ${result ? `<line class="result" x1="0" x2="${w}" y1="${y(result)}" y2="${y(result)}" stroke="currentColor" vector-effect="non-scaling-stroke"/>` : ""}
+    <line class="track" x1="0" x2="${w}" y1="${h - 0.5}" y2="${h - 0.5}" vector-effect="non-scaling-stroke"/>
   </svg>`;
 }
 
