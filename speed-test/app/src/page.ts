@@ -225,8 +225,11 @@ ${FONTS}
   .map .map-canvas { position: absolute; inset: 0; }
   .map-canvas .maplibregl-canvas:focus-visible { outline: none; }
   /* MapLibre markers: the server's filled pin with a halo, the client's ring. */
-  .server-pin { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in oklab, var(--brand) 22%, transparent); }
-  .server-pin::after { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 2px var(--surface); }
+  .server-pin {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; cursor: default;
+    background: var(--surface); box-shadow: 0 0 0 1.5px var(--brand), 0 1px 4px #0c1d3155;
+  }
+  .server-pin svg { width: 18px; height: 18px; fill: var(--brand); display: block; }
   .client-pin { width: 12px; height: 12px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 2.5px var(--text); }
   .map-zoom { position: absolute; z-index: 2; right: 16px; bottom: 56px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow: hidden; }
   .map-zoom button { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--text); cursor: pointer; padding: 0; }

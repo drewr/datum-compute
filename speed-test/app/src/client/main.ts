@@ -5,6 +5,7 @@ import { geoInterpolate } from "d3-geo";
 import { area, curveMonotoneX, line } from "d3-shape";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { MARK } from "../theme.js";
 
 // The engine's default sequence (speedtest 1.14) without the packetLoss step,
 // which needs a TURN relay, and without the final 250 MB downloads. Each
@@ -331,12 +332,17 @@ function routeCoordinates(): [number, number][] {
   return coords;
 }
 
-function pin(className: string, title: string): HTMLElement {
+function pin(className: string, title: string, inner = ""): HTMLElement {
   const el = document.createElement("div");
   el.className = className;
   el.title = title;
+  el.innerHTML = inner;
   return el;
 }
+
+// The server end wears the Datum mark, as Cloudflare's map puts its logo on
+// the data center that served the test.
+const SERVER_BADGE = `<svg viewBox="-1 -1.4 150 150" aria-hidden="true"><path d="${MARK}"/></svg>`;
 
 let map: maplibregl.Map | null = null;
 try {
@@ -373,7 +379,7 @@ try {
 function showPlaces(): void {
   if (!map || !server) return;
   const m = map;
-  new maplibregl.Marker({ element: pin("server-pin", "Server") }).setLngLat([server.lon, server.lat]).addTo(m);
+  new maplibregl.Marker({ element: pin("server-pin", "Datum server", SERVER_BADGE) }).setLngLat([server.lon, server.lat]).addTo(m);
   if (!client) {
     m.jumpTo({ center: [server.lon, server.lat], zoom: 3.4 });
     return;
