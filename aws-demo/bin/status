@@ -12,3 +12,6 @@ for nd in $(nodes); do
 done
 echo; dc get connectgateways "$GW" 2>&1 | head -3
 echo; dc get connectnetworkbindings -o json | jq -r --arg gw "$GW" '.items[]|select(.spec.gatewayRef==$gw)|"\(.spec.connectorRef)\t\(.status.assignedAddress // "-")"'
+APP=${VISUAL_NAME:-$FLEET-viewer}
+h=$(dc get httpproxy "$APP" -o jsonpath='{.status.hostnames[0]}' 2>/dev/null)
+echo; if [ -n "$h" ]; then echo "viewer: https://$h"; else echo "viewer: not deployed (bin/visual)"; fi
