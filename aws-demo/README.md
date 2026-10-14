@@ -183,7 +183,7 @@ and a push mode (`MESH_PUSH_TOKEN`).
 network, running a small Alpine image (`jump/Dockerfile`: iputils `ping`, `traceroute`, `mtr`, `dig`,
 `curl`, `nc`, `ip`, and an `ssh` client). It prints the command for a shell inside the VPC:
 
-    datumctl --project <project> compute exec <fleet>-jump-us-east-1-us-east-1-0 -it -- sh
+    datumctl compute exec <fleet>-jump-us-east-1-us-east-1-0 -it --project <project> -- sh
 
 - The container has `NET_RAW` so `traceroute` and `mtr` work in exec sessions; `ping` uses iputils
   because BusyBox ping needs a raw socket. Egress from general-purpose instances is IPv6 only.

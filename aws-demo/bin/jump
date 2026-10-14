@@ -67,7 +67,7 @@ for _ in $(seq 60); do
 done
 if [ -n "$inst" ]; then
   say "jump instance $inst${addr:+ at $addr on $NET}"
-  say "shell: datumctl --project $PROJECT compute exec $inst -it -- sh"
+  say "shell: datumctl compute exec $inst -it --project $PROJECT -- sh"
 else
   warn "no jump instance with an address yet; check: datumctl get instances (workload $APP)"
 fi
