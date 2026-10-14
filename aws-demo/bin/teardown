@@ -47,7 +47,7 @@ for nd in $(nodes); do
   datum_down "$nd" "$bindings"
 done
 [ -n "${real_nodes:-}" ] || "$(dirname "$0")/visual" --delete
-[ -n "${real_nodes:-}" ] || "$(dirname "$0")/jump" --delete
+[ -n "${real_nodes:-}" ] || { "$(dirname "$0")/jump" --delete; "$(dirname "$0")/gwmap" --clear || true; }
 if [ "$DELNET" = 1 ] && [ -z "${real_nodes:-}" ]; then
   say "deleting gateway $GW and network $NET"
   # also any other gateway on this network, such as one a join created with a hash suffix

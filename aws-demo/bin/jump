@@ -74,7 +74,8 @@ say "jump instance $inst${addr:+ at $addr on $NET}"
 
 # netcheck and its member list go in over exec (there is no SSM here); retry while the agent starts
 GW=$(gateway_for_net); GW=${GW:-connect-$NET-$GW_LOCATION}
-members=$(fleet_members "$GW")
+members=$("$DEMO_DIR/bin/gwmap" 2>/dev/null | grep -E '^[^ ]+ [0-9a-f:]+$')
+[ -n "$members" ] || warn "no gateway aliases; netcheck cannot measure members from here (bin/gwmap)"
 script=$STATE_DIR/jump-netcheck.sh
 {
   echo 'cat > /root/netcheck <<'"'NETCHECK_EOF'"

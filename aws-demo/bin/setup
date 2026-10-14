@@ -411,6 +411,7 @@ wait
 say "members of $NET via $GW:"; echo "$members" | sed 's/^/    /'
 say "run netcheck on a random instance: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/netcheck [node|region]"
 say "or open a shell: ${AWS_PROFILE:+AWS_PROFILE=$AWS_PROFILE }$DEMO_DIR/bin/login <node|region>   (nodes: $(nodes | tr '\n' ' '))"
+if [ "$fail" = 0 ]; then "$DEMO_DIR/bin/gwmap" >/dev/null || warn "gateway aliases failed; re-run bin/gwmap"; fi
 if [ "${JUMP:-1}" != 0 ] && [ "$fail" = 0 ]; then
   if [ -s "$DEMO_DIR/jump/IMAGE" ]; then ( "$DEMO_DIR/bin/jump" || warn "jump host failed; re-run bin/jump" ) &
   else warn "no jump/IMAGE; run jump/build.sh then bin/jump for the jump host"; fi

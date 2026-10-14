@@ -46,11 +46,6 @@ for r in us-central-1 us-east-1; do
   printf '        - %-12s %-9s = %s\n' "$r" "($(city "$r"))" "$(ms "$t")"
 done
 echo "    * VPC member latency:"
-if [ -n "${JUMP:-}" ]; then
-  echo "        (not measured: an instance cannot start traffic to a connector's address."
-  echo "         From a node, run: ping -6 ${addr% *})"
-  exit 0
-fi
 d=$(mktemp -d)
 while read n a; do [ "$n" = "$me" ] && continue
   ( v=$(ping -6 -c3 -W2 -q "$a" 2>/dev/null | awk -F/ '/^rtt/{print $5}'); echo "${v:-9999} $n $a" > $d/$n ) &
