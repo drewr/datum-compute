@@ -385,9 +385,9 @@ function showPlaces(): void {
   const coords = routeCoordinates();
   const bounds = coords.reduce((b, c) => b.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
   m.fitBounds(bounds, { padding: { top: 40, right: 72, bottom: 72, left: 72 }, maxZoom: 4.2, animate: false });
-  const update = () => (m.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "LineString", coordinates: coords });
-  if (m.isStyleLoaded()) update();
-  else m.once("style.load", update);
+  // If the style hasn't loaded yet, its style.load handler adds the route
+  // from routeCoordinates() itself.
+  (m.getSource("route") as maplibregl.GeoJSONSource | undefined)?.setData({ type: "LineString", coordinates: coords });
 }
 
 $("#zoom-in").addEventListener("click", () => map?.zoomIn());
