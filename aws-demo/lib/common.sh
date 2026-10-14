@@ -166,6 +166,14 @@ adoptable_net() {
     '($bound | split(" ")) as $b | [.items[] | select(.spec.locationRef==$l and (.spec.networkRef | startswith($p) and endswith("-net")) and ([.metadata.name] | inside($b) | not)) | .spec.networkRef][0] // empty'
 }
 
+# idle_gateways -> "<network> <gateway>" for each gateway at $GW_LOCATION that has no members bound to it
+idle_gateways() {
+  local bound
+  bound=$(dc get connectnetworkbindings -o json 2>/dev/null | jq -r '[.items[].spec.gatewayRef] | unique | join(" ")')
+  dc get connectgateways -o json 2>/dev/null | jq -r --arg l "$GW_LOCATION" --arg bound "$bound" \
+    '($bound | split(" ")) as $b | .items[] | select(.spec.locationRef==$l and ([.metadata.name] | inside($b) | not)) | "\(.spec.networkRef) \(.metadata.name)"'
+}
+
 # throttle: wait until fewer than ${JOBS:-12} background jobs are running
 throttle() { while [ "$(jobs -rp | wc -l)" -ge "${JOBS:-12}" ]; do wait -n; done; }
 
