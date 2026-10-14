@@ -70,6 +70,9 @@ export const PAGE = `<!doctype html>
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0c1d31">
 <meta name="description" content="Measure the download, upload, latency and jitter between your browser and a Datum Cloud compute instance.">
 <title>Speed Test · Datum</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 ${THEME_SCRIPT}
 ${FONTS}
 <style>${THEME_CSS}

@@ -34,6 +34,10 @@ The server looks for `asn.mmdb` and `city.mmdb` in `app/`; set `ASN_DB` and `CIT
 
 Then open http://localhost:8080. Over loopback, upload results run into the Gbps.
 
+## Icons
+
+The favicon is the Datum mark from the logo in `app/src/theme.ts`: an SVG that the server builds from it, canyon clay in light mode and aurora moss in dark. `app/static/` holds two raster copies, `favicon.ico` (16, 32 and 48 px, canyon clay on transparent) and `apple-touch-icon.png` (180 px, aurora moss on midnight fjord). They were drawn from the same path with `rsvg-convert` and combined with ImageMagick; redraw them if the mark or colors change.
+
 ## Build and deploy
 
 `nix-build -A app` builds the OCI image. [manifests/speed-test.yaml](manifests/speed-test.yaml) has the steps to wrap it for the unikernel class and deploy it.

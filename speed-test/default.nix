@@ -46,6 +46,7 @@ let
         ./app/tsconfig.json
         ./app/tsconfig.client.json
         ./app/src
+        ./app/static
       ];
     };
     npmDepsHash = "sha256-mxb72IAa0e85EBGyDATWP536kTxfXbNlQ80/QmSByHk=";
@@ -54,7 +55,7 @@ let
       runHook preInstall
       npm prune --omit=dev
       mkdir -p $out/lib/speed-test
-      cp -r dist node_modules package.json $out/lib/speed-test/
+      cp -r dist node_modules package.json static $out/lib/speed-test/
       gunzip -c ${asnDb} > $out/lib/speed-test/asn.mmdb
       gunzip -c ${cityDb} > $out/lib/speed-test/city.mmdb
       runHook postInstall

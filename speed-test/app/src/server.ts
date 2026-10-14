@@ -11,6 +11,7 @@ import { gzipSync } from "node:zlib";
 import mmdb from "mmdb-lib";
 import type { AsnResponse, CityResponse } from "mmdb-lib/lib/reader/response.js";
 import { PAGE } from "./page.js";
+import { FAVICON_SVG } from "./theme.js";
 
 const port = Number(process.env.PORT ?? 8080);
 
@@ -37,6 +38,23 @@ for (const [name, type] of [
 ]) {
   const body = readFileSync(new URL(`./${name}`, import.meta.url));
   ASSETS[`/${name}`] = { type, body, gzip: gzipSync(body, { level: 9 }) };
+}
+
+// The favicons: the SVG built from the logo mark in theme.ts, and the raster
+// fallbacks in static/ (favicon.ico for browsers that ask for it by name, the
+// PNG for iOS home screens). They change rarely, so let browsers keep them.
+const ICONS: Record<string, { type: string; body: Buffer }> = {
+  "/favicon.svg": { type: "image/svg+xml", body: Buffer.from(FAVICON_SVG) },
+};
+for (const [name, type] of [
+  ["favicon.ico", "image/x-icon"],
+  ["apple-touch-icon.png", "image/png"],
+]) {
+  try {
+    ICONS[`/${name}`] = { type, body: readFileSync(new URL(`../static/${name}`, import.meta.url)) };
+  } catch (err) {
+    console.warn(`no ${name}: ${(err as Error).message}`);
+  }
 }
 
 // The instance's hostname, for the page's "Served by". Unikernel instances
@@ -193,6 +211,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       ...(gzip ? { "content-encoding": "gzip" } : {}),
     });
     res.end(gzip ? asset.gzip : asset.body);
+    return;
+  }
+  const icon = req.method === "GET" ? ICONS[url.pathname] : undefined;
+  if (icon) {
+    res.writeHead(200, { "content-type": icon.type, "cache-control": "public, max-age=86400" });
+    res.end(icon.body);
     return;
   }
   if (req.method === "GET" && url.pathname === "/__meta") {
