@@ -19,11 +19,16 @@ let
     PRETTY_NAME="NixOS ${lib.trivial.release} (${lib.trivial.codeName})"
   '';
 
-  # DB-IP's IP to ASN Lite (CC BY 4.0; the page credits it), for the page's
-  # "Your network". Released monthly; bump the month and hash now and then.
+  # DB-IP's IP to ASN Lite and IP to City Lite (CC BY 4.0; the page credits
+  # them), for the page's "Your network" and the client's end of the map's
+  # route. Released monthly; bump the month and hashes now and then.
   asnDb = pkgs.fetchurl {
     url = "https://download.db-ip.com/free/dbip-asn-lite-2026-10.mmdb.gz";
     hash = "sha256-bN3gK6qMG9YZq4TC5QXs2R1FKItah/qt8bfEFSWhepQ=";
+  };
+  cityDb = pkgs.fetchurl {
+    url = "https://download.db-ip.com/free/dbip-city-lite-2026-10.mmdb.gz";
+    hash = "sha256-yDnUB/haHgvdujVM7xayw5gYLRw07Y2YVVXc4TSzaxQ=";
   };
 
   # Compiles the server with tsc and bundles the browser code (Cloudflare's
@@ -51,6 +56,7 @@ let
       mkdir -p $out/lib/speed-test
       cp -r dist node_modules package.json $out/lib/speed-test/
       gunzip -c ${asnDb} > $out/lib/speed-test/asn.mmdb
+      gunzip -c ${cityDb} > $out/lib/speed-test/city.mmdb
       runHook postInstall
     '';
   };

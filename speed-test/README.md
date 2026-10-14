@@ -7,9 +7,9 @@ The browser runs Cloudflare's open-source measurement engine, [`@cloudflare/spee
 - `GET /__down?bytes=N` streams N random bytes (up to 100 MB).
 - `POST /__up` reads and discards the body.
 - Both return `Server-Timing: app;dur=…`, which the engine subtracts from time-to-first-byte to get latency.
-- `GET /__meta` returns the instance's location (`LOCATION`), its hostname, the client's address cut to /24 or /48, and the client's network (AS number and name).
+- `GET /__meta` returns the instance's location (`LOCATION`), its hostname, the client's address cut to /24 or /48, the client's network (AS number and name), and the client's rough place (city, and coordinates rounded to about 1 km) for the map's route.
 
-The network comes from DB-IP's [IP to ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) database (CC BY 4.0), which `default.nix` fetches and installs as `asn.mmdb` next to `dist/`. The lookup happens on the instance, so client addresses go nowhere else.
+The network and place come from DB-IP's [IP to ASN Lite](https://db-ip.com/db/download/ip-to-asn-lite) and [IP to City Lite](https://db-ip.com/db/download/ip-to-city-lite) databases (CC BY 4.0), which `default.nix` fetches and installs as `asn.mmdb` and `city.mmdb` next to `dist/`. The lookups happen on the instance, so client addresses go nowhere else. The city database is about 130 MB, which the server holds in memory.
 
 It differs from Cloudflare's test in three ways:
 
@@ -24,10 +24,11 @@ cd app
 npm ci
 npm run build
 curl -s https://download.db-ip.com/free/dbip-asn-lite-2026-10.mmdb.gz | gunzip > asn.mmdb
+curl -s https://download.db-ip.com/free/dbip-city-lite-2026-10.mmdb.gz | gunzip > city.mmdb
 PORT=8080 LOCATION=us-central-1 npm start
 ```
 
-The server looks for `asn.mmdb` in `app/`; set `ASN_DB` to read it from elsewhere. Without it the page leaves out "Your network".
+The server looks for `asn.mmdb` and `city.mmdb` in `app/`; set `ASN_DB` and `CITY_DB` to read them from elsewhere. Without them the page leaves out "Your network" and the route on the map.
 
 Then open http://localhost:8080. Over loopback, upload results run into the Gbps.
 

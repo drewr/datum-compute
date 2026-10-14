@@ -4,3 +4,4 @@ result*
 app/node_modules/
 app/dist/
 app/asn.mmdb
+app/city.mmdb

@@ -225,6 +225,8 @@ ${FONTS}
   .map .graticule { fill: none; stroke: var(--line); stroke-width: .5; opacity: .6; }
   .map .marker-halo { fill: var(--brand); opacity: .22; }
   .map .marker { fill: var(--brand); stroke: var(--surface); stroke-width: 2; }
+  .map .route { fill: none; stroke: var(--brand); stroke-width: 2; stroke-linecap: round; }
+  .map .client-marker circle { fill: var(--surface); stroke: var(--text); stroke-width: 2.5; }
   .map-zoom { position: absolute; right: 16px; bottom: 56px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); overflow: hidden; }
   .map-zoom button { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--text); cursor: pointer; padding: 0; }
   .map-zoom button + button { border-top: 1px solid var(--line); }
@@ -387,7 +389,7 @@ ${FONTS}
       <ul>
         <li>sends you random data, and receives and discards the data you upload;</li>
         <li>reports your IP address back to this page, cut to /24 (IPv4) or /48 (IPv6) for display;</li>
-        <li>looks up which network (ASN) your address belongs to, in a copy of DB-IP's database kept on the instance, so your address isn't sent to anyone else;</li>
+        <li>looks up which network (ASN) your address belongs to, and roughly where it is for the map, in copies of DB-IP's databases kept on the instance, so your address isn't sent to anyone else;</li>
         <li>keeps no log of your requests or results.</li>
       </ul>
     </div>

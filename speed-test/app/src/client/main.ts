@@ -1,7 +1,7 @@
 // Runs Cloudflare's measurement engine against this server and draws the
 // results into the page from ../page.ts. Bundled by esbuild into dist/client.js.
 import SpeedTest, { type MeasurementConfig, type Results } from "@cloudflare/speedtest";
-import { geoGraticule10, geoMercator, geoPath } from "d3-geo";
+import { geoGraticule10, geoInterpolate, geoMercator, geoPath } from "d3-geo";
 import { area, curveMonotoneX, line } from "d3-shape";
 import { feature } from "topojson-client";
 import type { Topology, GeometryCollection } from "topojson-specification";
@@ -252,23 +252,33 @@ window.addEventListener("resize", () => {
 interface Meta {
   location: string;
   instance: string | null;
-  client: { ip: string; family: string; network: { asn: number; org: string } | null };
+  client: {
+    ip: string;
+    family: string;
+    network: { asn: number; org: string } | null;
+    place: { lat: number; lon: number; city: string; country: string } | null;
+  };
 }
 
 const mapEl = $("#map");
 const landTopo = land110 as unknown as Topology<{ land: GeometryCollection }>;
 const land = feature(landTopo, landTopo.objects.land);
 let server: { lat: number; lon: number } | null = null;
+let client: { lat: number; lon: number; city: string; country: string } | null = null;
 let zoom = 1;
 
+// Like Cloudflare's map: when the client's rough place is known, frame it and
+// the server with the route between them; otherwise show the region around
+// the server. Never zoom in past about a region (26° wide), so a client in
+// the same metro still gets some map around the pair.
 function drawMap(): void {
   const w = mapEl.clientWidth;
   const h = mapEl.clientHeight;
   if (!w || !h) return;
   const projection = geoMercator();
+  let center: [number, number] = [0, 20];
   if (server) {
-    // Start at roughly a continent around the server, like Cloudflare's map.
-    const span = 26 / zoom;
+    const span = 26;
     projection.fitExtent([[0, 0], [w, h]], {
       type: "MultiPoint",
       coordinates: [
@@ -276,22 +286,43 @@ function drawMap(): void {
         [server.lon + span, server.lat + span * 0.55],
       ],
     });
-    const [px, py] = projection([server.lon, server.lat])!;
-    const [tx, ty] = projection.translate();
-    projection.translate([tx + w / 2 - px, ty + h / 2 - py]);
+    const regional = projection.scale();
+    center = [server.lon, server.lat];
+    if (client) {
+      // Room around the pair, more at the bottom for the zoom and credit.
+      projection.fitExtent([[48, 40], [w - 48, h - 72]], {
+        type: "LineString",
+        coordinates: [[client.lon, client.lat], [server.lon, server.lat]],
+      });
+      projection.scale(Math.min(projection.scale(), regional));
+      center = geoInterpolate([client.lon, client.lat], [server.lon, server.lat])(0.5);
+    }
   } else {
-    projection.fitSize([w, h], { type: "Sphere" }).scale(projection.scale() * zoom);
+    projection.fitSize([w, h], { type: "Sphere" });
   }
+  projection.scale(projection.scale() * zoom);
+  const [px, py] = projection(center)!;
+  const [tx, ty] = projection.translate();
+  projection.translate([tx + w / 2 - px, ty + (server && client ? h / 2 - 16 : h / 2) - py]);
+
   const path = geoPath(projection);
-  let marker = "";
+  let overlay = "";
+  if (server && client) {
+    const route = path({ type: "LineString", coordinates: [[client.lon, client.lat], [server.lon, server.lat]] }) ?? "";
+    const [cx, cy] = projection([client.lon, client.lat])!;
+    const where = [client.city, client.country].filter(Boolean).join(", ");
+    overlay += `<path class="route" d="${route}"/>
+      <g class="client-marker"><title>You${where ? `: ${where}` : ""} (approximate)</title><circle cx="${cx}" cy="${cy}" r="5"/></g>`;
+  }
   if (server) {
     const [x, y] = projection([server.lon, server.lat])!;
-    marker = `<circle class="marker-halo" cx="${x}" cy="${y}" r="16"/><circle class="marker" cx="${x}" cy="${y}" r="6"/>`;
+    overlay += `<circle class="marker-halo" cx="${x}" cy="${y}" r="16"/><circle class="marker" cx="${x}" cy="${y}" r="6"/>`;
   }
-  const svg = `<svg class="map-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="Map of the server location">
+  const label = server && client ? "Map of your approximate location and the server" : "Map of the server location";
+  const svg = `<svg class="map-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="${label}">
     <path class="graticule" d="${path(geoGraticule10()) ?? ""}"/>
     <path class="land" d="${path(land) ?? ""}"/>
-    ${marker}
+    ${overlay}
   </svg>`;
   mapEl.querySelector(".map-svg")?.remove();
   mapEl.insertAdjacentHTML("afterbegin", svg);
@@ -311,6 +342,7 @@ async function loadMeta(): Promise<void> {
     const meta: Meta = await (await fetch("/__meta", { cache: "no-store" })).json();
     const loc = LOCATIONS[meta.location];
     server = loc ?? null;
+    client = meta.client.place;
     $("#d-family").textContent = meta.client.family;
     $("#d-location").textContent = loc ? `${loc.city} (${meta.location})` : meta.location || "Unknown";
     $("#d-instance").textContent = meta.instance ?? "";
