@@ -5,6 +5,10 @@
 #   bin/setup [N]                   a fleet of N nodes (default 3), spread over the pool regions; with a
 #                                   fleet already, adds up to N in total
 #   bin/setup --add [N]             add N more nodes (default 3)
+#   REGIONS=na bin/setup --resize N make the fleet exactly N nodes, all inside REGIONS (required): remove
+#                                   nodes outside REGIONS, trim the fullest continent/region if over N, add
+#                                   to the emptiest if under. A node that already fits is never touched.
+#                                   --dry-run prints that plan and changes nothing.
 #   REGIONS="eu ap-southeast-1" bin/setup [N]
 #                                   spread over these regions (N defaults to one per region). Each entry
 #                                   (space or comma separated) is an AWS region or a continent alias that
@@ -22,16 +26,22 @@ preflight
 check_fleet_name
 
 # ---- 0. pick nodes --------------------------------------------------------------------------
-add='' args=()
+add='' resize='' dry='' args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --add) add=1 ;;
+    --resize) resize=1 ;;
+    --dry-run) dry=1 ;;
     *) args+=("$1") ;;
   esac
   shift
 done
 set -- ${args[@]+"${args[@]}"}
-[ $# -le 1 ] || die "usage: bin/setup [--add] [N]   (REGIONS=\"eu ap-southeast-1\" picks regions)"
+[ $# -le 1 ] || die "usage: bin/setup [--add | --resize [--dry-run]] [N]   (REGIONS=\"eu ap-southeast-1\" picks regions)"
+[ -z "$resize" ] || [ -z "$add" ] || die "--resize and --add cannot be combined"
+[ -z "$dry" ] || [ -n "$resize" ] || die "--dry-run only applies to --resize"
+[ -z "$resize" ] || [ -n "${REGIONS:-}" ] || die "--resize needs REGIONS (the topology to converge on), e.g. REGIONS=na bin/setup --resize 3"
+[ -z "$resize" ] || [ -n "${1:-}" ] || die "--resize needs N"
 n_req=${1:-}
 case $n_req in ''|*[!0-9]*) [ -z "$n_req" ] || die "N must be a number, got '$n_req'" ;; esac
 [ -z "$n_req" ] || [ "$n_req" -ge 1 ] || die "N must be at least 1"
@@ -67,8 +77,40 @@ while read -r nd; do
 done < <(printf '%s\n%s\n' "$have" "$(bad_names)")   # bad names count too, so they are never picked again
 for r in $cand; do cnt[$r]=$(grep -c -x -- "$r-[0-9]*" <<<"$have"); done
 
+continent_of() { case $1 in us-*|ca-*) echo na ;; *) echo "${1%%-*}" ;; esac; }
+declare -A ccnt=()
+for r in $cand; do c=$(continent_of "$r"); ccnt[$c]=$(( ${ccnt[$c]:-0} + cnt[$r] )); done
+
 existing=$(grep -c . <<<"$have")
-if [ -n "$n_req" ]; then
+gone=()   # --resize: nodes to remove
+if [ -n "$resize" ]; then
+  # Nodes outside REGIONS go. If the nodes inside are still over N, trim the fullest continent, then its
+  # fullest region (ties at random), newest node first. Nodes that fit are left alone.
+  inside=
+  for nd in $have; do
+    if grep -qxF -- "$(node_region "$nd")" <<<"$cand"; then inside+="$nd"$'\n'; else gone+=("$nd"); fi
+  done
+  kept=$(grep -c . <<<"$inside")
+  while [ "$kept" -gt "$n_req" ]; do
+    best=
+    # shellcheck disable=SC2086
+    for r in $(shuf -e $cand); do
+      [ "${cnt[$r]}" -gt 0 ] || continue
+      if [ -n "$best" ]; then
+        bc=$(continent_of "$best"); rc=$(continent_of "$r")
+        [ "${ccnt[$rc]}" -gt "${ccnt[$bc]}" ] || { [ "${ccnt[$rc]}" -eq "${ccnt[$bc]}" ] && [ "${cnt[$r]}" -gt "${cnt[$best]}" ]; } || continue
+      fi
+      best=$r
+    done
+    victim=$(grep -x -- "$best-[0-9]*" <<<"$inside" | awk -F- '{print $NF, $0}' | sort -n | tail -1 | cut -d' ' -f2)
+    gone+=("$victim")
+    inside=$(grep -vxF -- "$victim" <<<"$inside")
+    c=$(continent_of "$best"); ccnt[$c]=$((ccnt[$c] - 1)); cnt[$best]=$((cnt[$best] - 1)); kept=$((kept - 1))
+  done
+fi
+if [ -n "$resize" ]; then
+  to_add=$((n_req - kept))
+elif [ -n "$n_req" ]; then
   if [ -n "$add" ]; then to_add=$n_req; else to_add=$((n_req > existing ? n_req - existing : 0)); fi
 elif [ -n "$explicit" ]; then
   to_add=0; for r in $cand; do [ "${cnt[$r]}" -gt 0 ] || to_add=$((to_add + 1)); done   # one per region that has none
@@ -78,15 +120,13 @@ else
   to_add=0                                                                             # plain re-run: repair only
 fi
 total=$((existing + to_add))
+[ -z "$resize" ] || total=$n_req
 if [ "$total" -gt 30 ] && [ -z "${FORCE:-}" ]; then
   die "$total nodes is more than the gateway's peer routes allow (32 in all, counting the viewer); set FORCE=1 to try anyway"
 fi
 new=()
 # Spread over continents first, then over regions, breaking ties at random: REGIONS=eu,na with 5 nodes
 # gives 3+2 across the two, not five in whichever was listed first.
-continent_of() { case $1 in us-*|ca-*) echo na ;; *) echo "${1%%-*}" ;; esac; }
-declare -A ccnt=()
-for r in $cand; do c=$(continent_of "$r"); ccnt[$c]=$(( ${ccnt[$c]:-0} + cnt[$r] )); done
 for _ in $(seq "$to_add"); do
   best=
   # shellcheck disable=SC2086
@@ -108,6 +148,14 @@ done
 for nd in ${new[@]+"${new[@]}"}; do
   [ "$(( ${#FLEET} + 1 + ${#nd} + 7 ))" -le 63 ] || die "fleet name $FLEET is too long for node names like $nd; set a shorter FLEET_PREFIX or FLEET"
 done
+if [ -n "$resize" ]; then
+  say "resize to $n_req in ${REGIONS}: keeping ${kept}, removing ${gone[*]:-none}, adding ${new[*]:-none}"
+  [ -z "$dry" ] || { say "dry run: nothing changed"; exit 0; }
+  if [ ${#gone[@]} -gt 0 ]; then
+    "$DEMO_DIR/bin/teardown" "${gone[@]}" || die "teardown of ${gone[*]} failed"
+    have=$(nodes)
+  fi
+fi
 { printf '%s\n' "$have"; printf '%s\n' ${new[@]+"${new[@]}"}; } | sed '/^$/d' | awk '!seen[$0]++' >"$nodes_file.new" && mv "$nodes_file.new" "$nodes_file"
 say "nodes: $(nodes | wc -l) in $(regions | wc -l) regions; new: ${new[*]:-none}"
 

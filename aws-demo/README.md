@@ -7,6 +7,7 @@ staging. Everything here is scripted, so you can build it, look at it and tear i
 ```
 bin/setup [N]            a fleet of N nodes (default 3), several per region if N exceeds the regions; re-run to repair
 bin/setup --add [N]     add N more nodes (default 3)
+REGIONS=na bin/setup --resize 3   make the fleet exactly 3 nodes, all in REGIONS (required): removes nodes outside it, trims the fullest continent/region if over, adds to the emptiest if under, and never touches a node that already fits; add `--dry-run` to see the plan first
 REGIONS="eu ap-southeast-1" bin/setup 10   spread 10 nodes over these regions (space or comma separated); an entry is an
                         AWS region or a continent alias (na, sa, eu, ap, me, af) meaning every pool region there (the default pool is 17 regions; set `POOL` to change it). Setup probes the regions first and leaves out any the operator policy denies, with a warning
 bin/status               nodes, SSM state, the gateway, each member's address
