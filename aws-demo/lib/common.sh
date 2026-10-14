@@ -8,6 +8,7 @@ export AWS_PAGER=
 GW_LOCATION=${GW_LOCATION:-us-east-1}          # Datum location of the single gateway
 INSTANCE_TYPE=${INSTANCE_TYPE:-t4g.micro}
 TAG=datum-connect-test                         # project tag value on every AWS resource we create
+FLEET_PREFIX_SET=${FLEET_PREFIX:+1}
 FLEET_PREFIX=${FLEET_PREFIX:-drewr-}           # FLEET = this + the AWS user's name (see set_fleet); names everything
 BOUNDARY=${FLEET_PREFIX}boundary                # permissions boundary for instance roles (one per account)
 POOL=${POOL:-"us-east-1 us-east-2 us-west-1 us-west-2 ca-central-1 sa-east-1 eu-west-1 eu-west-2 eu-west-3 eu-central-1 eu-north-1 ap-south-1 ap-northeast-1 ap-northeast-2 ap-northeast-3 ap-southeast-1 ap-southeast-2"}
@@ -25,6 +26,15 @@ need() { for c in "$@"; do command -v "$c" >/dev/null || die "missing command: $
 # operator under different users, can run side by side. Set FLEET to override.
 set_fleet() {
   local arn; arn=$(aws sts get-caller-identity --query Arn --output text) || die "aws is not logged in${AWS_PROFILE:+ (profile $AWS_PROFILE)}"
+  # A FLEET that contains the user's name carries its own prefix (hello-demo261014-01 => hello-), so
+  # FLEET alone is enough unless FLEET_PREFIX is set explicitly.
+  local user; user=$(printf '%s' "${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
+  if [ -n "${FLEET:-}" ] && [ -z "$FLEET_PREFIX_SET" ]; then
+    case $arn:$FLEET in
+      *:user/*:*"$user"|*:user/*:*"$user"-*)
+        case ${FLEET%%"$user"*} in *-) FLEET_PREFIX=${FLEET%%"$user"*}; BOUNDARY=${FLEET_PREFIX}boundary ;; esac ;;
+    esac
+  fi
   local base; base=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
   [ -n "${FLEET:-}" ] || FLEET=$base
   # The operator policy grants SSM parameters only under /<FLEET_PREFIX><user>/, so keys of an extended
@@ -59,7 +69,7 @@ preflight() {
   PROJECT_UID=$(datumctl get projects "$PROJECT" --organization "$ORG" -o jsonpath='{.metadata.uid}' 2>/dev/null) || true
   [ -n "$PROJECT_UID" ] || die "cannot read project $PROJECT in $ORG"
   say "aws account $ACCOUNT, fleet $FLEET; datum $ORG/$PROJECT ($API_ENDPOINT)"
-  export ACCOUNT ORG PROJECT PROJECT_UID FLEET
+  export ACCOUNT ORG PROJECT PROJECT_UID FLEET FLEET_PREFIX
 }
 
 # check_fleet_name: the operator policy grants only AWS names that start with <FLEET_PREFIX><user>-, so
@@ -71,8 +81,8 @@ check_fleet_name() {
   base=$(printf '%s' "${FLEET_PREFIX}${arn##*/}" | tr 'A-Z_' 'a-z-' | tr -c 'a-z0-9-' '-')
   case $FLEET in
     "$base"|"$base"-*) ;;
-    *) die "FLEET $FLEET is not allowed for $arn: the operator policy only grants names starting $base-
-       use the default (unset FLEET) or an extension such as FLEET=$base-b" ;;
+    *) die "FLEET $FLEET is not allowed for $arn: names must start $base- (FLEET_PREFIX is ${FLEET_PREFIX}, from the environment or default)
+       name the fleet <prefix>${arn##*/}[-suffix] where <prefix> is the FLEET_PREFIX you gave bin/bootstrap-iam, or unset FLEET" ;;
   esac
 }
 
