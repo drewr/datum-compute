@@ -189,7 +189,7 @@ network, running a small Alpine image (`jump/Dockerfile`: iputils `ping`, `trace
   because BusyBox ping needs a raw socket. Egress from general-purpose instances is IPv6 only.
 - `netcheck` is installed in `/root` (the exec working directory, also on `PATH`) and refreshed with its
   member list on every `bin/jump` run, which `bin/setup` makes, as it does for the nodes. Instances cannot
-  start traffic to a connector's address, so the member latencies read "unreachable" from here; ping the
+  start traffic to a connector's address, so netcheck skips the member latencies here; ping the
   jump host from a node instead.
 - The image is built by `jump/build.sh` (pushes `ghcr.io/drewr/datum-jump`, pinned by digest in
   `jump/IMAGE`; same pull secret as the viewer).

@@ -46,6 +46,11 @@ for r in us-central-1 us-east-1; do
   printf '        - %-12s %-9s = %s\n' "$r" "($(city "$r"))" "$(ms "$t")"
 done
 echo "    * VPC member latency:"
+if [ -n "${JUMP:-}" ]; then
+  echo "        (not measured: an instance cannot start traffic to a connector's address."
+  echo "         From a node, run: ping -6 ${addr% *})"
+  exit 0
+fi
 d=$(mktemp -d)
 while read n a; do [ "$n" = "$me" ] && continue
   ( v=$(ping -6 -c3 -W2 -q "$a" 2>/dev/null | awk -F/ '/^rtt/{print $5}'); echo "${v:-9999} $n $a" > $d/$n ) &
@@ -55,6 +60,3 @@ cw=0; while IFS=$'\t' read -r a r t; do c=$(city "$r"); [ ${#c} -gt $cw ] && cw=
 aw=$(echo "$rows" | awk -F'\t' '{ if (length($1)>w) w=length($1) } END{print w}'); rw=$(echo "$rows" | awk -F'\t' '{ if (length($2)>w) w=length($2) } END{print w}')
 while IFS=$'\t' read -r a r t; do printf '        - %-*s\t%-*s\t%-*s\t%s\n' "$aw" "$a" "$rw" "$r" "$cw" "$(city "$r")" "$t"; done <<<"$rows"
 rm -rf $d
-if [ -n "${JUMP:-}" ] && [ -n "$rows" ] && ! grep -q -v 'unreachable$' <<<"$rows"; then
-  echo "    (an instance cannot start traffic to a connector's address; from a node, ping this host at ${addr% *} instead)"
-fi
