@@ -9,49 +9,71 @@ export interface MeshState {
   stale: boolean;
 }
 
+/** A poll that has not answered by now is dropped, so one stuck request cannot stop the page updating. */
+const POLL_TIMEOUT_MS = 6000;
+
 /** Polls /api/mesh, keeping the last good view through transient failures. */
 export function useMesh(intervalMs = 2000, paused = false): MeshState {
   const [state, setState] = useState<MeshState>({ view: null, receivedAt: 0, stale: false });
-  const inflight = useRef(false);
-  const pollNow = useRef<() => void>(() => {});
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const pollNow = useRef<() => void>(() => {});
+  const cancelPoll = useRef<() => void>(() => {});
 
   useEffect(() => {
     let cancelled = false;
-    const poll = async () => {
+    let current: AbortController | null = null;
+    cancelPoll.current = () => current?.abort();
+    const poll = async (force = false) => {
       // A backgrounded tab on a phone should not keep polling.
-      if (inflight.current || document.hidden || pausedRef.current) return;
-      inflight.current = true;
+      if (document.hidden || pausedRef.current) return;
+      if (current) {
+        if (!force) return;
+        current.abort();
+      }
+      const ac = new AbortController();
+      current = ac;
+      const timer = window.setTimeout(() => ac.abort(), POLL_TIMEOUT_MS);
       try {
-        const res = await fetch('/api/mesh', { cache: 'no-store' });
+        const res = await fetch('/api/mesh', { cache: 'no-store', signal: ac.signal });
         if (!res.ok) throw new Error(res.statusText);
         const view = (await res.json()) as MeshView;
-        if (!cancelled && !pausedRef.current) setState({ view, receivedAt: performance.now(), stale: false });
+        if (!cancelled && current === ac && !pausedRef.current) {
+          setState({ view, receivedAt: performance.now(), stale: false });
+        }
       } catch {
-        if (!cancelled) setState((s) => ({ ...s, stale: true }));
+        // Aborted by a pause or by a newer poll: nothing to report. Timed out or failed: keep the old view.
+        if (!cancelled && current === ac && !pausedRef.current) setState((s) => ({ ...s, stale: true }));
       } finally {
-        inflight.current = false;
+        window.clearTimeout(timer);
+        if (current === ac) current = null;
       }
     };
-    pollNow.current = () => void poll();
+    pollNow.current = () => void poll(true);
     void poll();
-    const id = window.setInterval(poll, intervalMs);
+    const id = window.setInterval(() => void poll(), intervalMs);
     // Refresh as soon as the visitor comes back to the page.
     const onVisible = () => {
-      if (!document.hidden) void poll();
+      if (!document.hidden) void poll(true);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
+      current?.abort();
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [intervalMs]);
 
-  // Resuming catches up to live straight away rather than at the next tick.
+  // Pausing drops any request in flight; resuming starts a fresh one at once rather than at the next tick.
+  const mounted = useRef(false);
   useEffect(() => {
-    if (!paused) pollNow.current();
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    if (paused) cancelPoll.current();
+    else pollNow.current();
   }, [paused]);
 
   return state;
