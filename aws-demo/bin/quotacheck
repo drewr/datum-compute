@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Report the project's Datum quotas that the demo consumes, as used/total, so you can see headroom
+# before bin/setup. Read-only; needs no AWS access.
+#
+#   bin/quotacheck          the quotas the demo uses
+#   bin/quotacheck --all    every quota the project has
+#
+# Lines at 80% or more are marked "!" (100% is "!!"). A fleet needs about 1 gateway, 2 instances and
+# workloads, 3 ipclaims, 1 httpproxy/gateway/httproute/endpointslice (the viewer) and 2-3 secrets;
+# nodes themselves are not metered, but networking.datumapis.com/connectors has a small limit.
+. "$(dirname "$0")/../lib/common.sh"
+need datumctl jq
+case "${1:-}" in ""|--all) ;; *) die "usage: bin/quotacheck [--all]" ;; esac
+
+PROJECT=${PROJECT:-$(datumctl ctx 2>/dev/null | sed -n 's/.*\(project-[^[:space:]]*\)[[:space:]]*project[[:space:]]*\*.*/\1/p')}
+[ -n "$PROJECT" ] || die "datumctl has no project context (datumctl ctx use ORG/PROJECT, or set PROJECT)"
+
+json=$(timeout 60 datumctl --project "$PROJECT" get allowancebuckets -A -o json 2>&1) || die "cannot read quotas for $PROJECT: $(tail -1 <<<"$json")"
+
+jq -r --arg all "${1:-}" '
+  ["connect.datumapis.com/connectgateways","networking.datumapis.com/connectors",
+   "compute.datumapis.com/instances","compute.datumapis.com/workloads",
+   "compute.datumapis.com/vcpus","compute.datumapis.com/memory",
+   "ipam.miloapis.com/ipclaims",
+   "networking.datumapis.com/httpproxies","gateway.networking.k8s.io/gateways",
+   "gateway.networking.k8s.io/httproutes","discovery.k8s.io/endpointslices",
+   "core.miloapis.com/secrets","core.miloapis.com/configmaps"] as $demo
+  | [.items[] | {t: .spec.resourceType, used: (.status.allocated // 0), total: (.status.limit // 0)}]
+  | (if $all == "--all" then sort_by(.t) else [ $demo[] as $d | .[] | select(.t == $d) ] end)
+  | .[]
+  | (if .total == 0 then "" elif .used >= .total then "!!" elif .used * 5 >= .total * 4 then "!" else "" end) as $m
+  | "\(.t)\t\(.used)/\(.total)\t\($m)"' <<<"$json" | column -t -s "$(printf '\t')"
