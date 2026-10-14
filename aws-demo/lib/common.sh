@@ -258,3 +258,33 @@ fleet_members() {
     '.items[] | select(.spec.gatewayRef==$gw) | select(.spec.connectorRef as $c | $names | index($c)) | select(.status.assignedAddress)
      | "\(.spec.connectorRef) \(.status.assignedAddress|sub("/128";""))"'
 }
+
+# Datum ServiceAccount helpers (bin/setup for the nodes, bin/jump for the jump host)
+create_sa() { # name
+  dc create --validate=false -f - >/dev/null <<Y
+apiVersion: iam.miloapis.com/v1alpha1
+kind: ServiceAccount
+metadata: {name: $1}
+spec: {state: Active}
+Y
+}
+mint_key() { # name email -> prints the private key (returned only once); replaces an old key object
+  dc delete serviceaccountkeys "$1-key" >/dev/null 2>&1 || true
+  dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey
+apiVersion: identity.miloapis.com/v1alpha1
+kind: ServiceAccountKey
+metadata: {name: $1-key}
+spec: {serviceAccountUserName: $2}
+Y
+}
+create_binding() { # name uid; `editor` is the only assignable role that inherits connect admin on staging (broad; see README)
+  dco create --validate=false -n "organization-$ORG" -f - >/dev/null <<Y
+apiVersion: iam.miloapis.com/v1alpha1
+kind: PolicyBinding
+metadata: {name: $1-editor, namespace: organization-$ORG}
+spec:
+  resourceSelector: {resourceRef: {apiGroup: resourcemanager.miloapis.com, kind: Project, name: $PROJECT, uid: $PROJECT_UID}}
+  roleRef: {name: editor, namespace: datum-cloud}
+  subjects: [{kind: ServiceAccount, name: $1, uid: $2}]
+Y
+}

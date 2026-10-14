@@ -216,39 +216,10 @@ if ! aws iam get-policy --policy-arn "$BARN" >/dev/null 2>&1; then
 fi
 
 # ---- 3. per node: Datum identity + AWS instance --------------------------------------------
-create_sa() { # name
-  dc create --validate=false -f - >/dev/null <<Y
-apiVersion: iam.miloapis.com/v1alpha1
-kind: ServiceAccount
-metadata: {name: $1}
-spec: {state: Active}
-Y
-}
-mint_key() { # name email -> prints the private key (returned only once); replaces an old key object
-  dc delete serviceaccountkeys "$1-key" >/dev/null 2>&1 || true
-  dc create --validate=false -o json -f - <<Y | jq -r .status.privateKey
-apiVersion: identity.miloapis.com/v1alpha1
-kind: ServiceAccountKey
-metadata: {name: $1-key}
-spec: {serviceAccountUserName: $2}
-Y
-}
 put_key() { # region param key: the key goes in on stdin, never on a command line
   aws ssm put-parameter --region "$1" --name "$2" --type SecureString --value file:///dev/stdin \
     --tags Key=project,Value=$TAG Key=fleet,Value=$FLEET >/dev/null <<<"$3"
 }
-create_binding() { # name uid; `editor` is the only assignable role that inherits connect admin on staging (broad; see README)
-  dco create --validate=false -n "organization-$ORG" -f - >/dev/null <<Y
-apiVersion: iam.miloapis.com/v1alpha1
-kind: PolicyBinding
-metadata: {name: $1-editor, namespace: organization-$ORG}
-spec:
-  resourceSelector: {resourceRef: {apiGroup: resourcemanager.miloapis.com, kind: Project, name: $PROJECT, uid: $PROJECT_UID}}
-  roleRef: {name: editor, namespace: datum-cloud}
-  subjects: [{kind: ServiceAccount, name: $1, uid: $2}]
-Y
-}
-
 sa_for() { # node: ServiceAccount, key -> SSM, PolicyBinding. Returns 3 if the name is stuck (no status even after a recreate)
   local nd=$1 r n; r=$(node_region "$nd"); n=$(member "$nd")
   local uid="" email="" i try gp key

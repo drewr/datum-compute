@@ -195,7 +195,12 @@ network, running a small Alpine image (`jump/Dockerfile`: iputils `ping`, `trace
   and DNATs it to the node on the gateway, so from the jump `ping -6 fd20:0:32::1:0:101` reaches a node.
   The map is in `state/<fleet>/gw-aliases` and is what netcheck uses here. It lives on the running gateway
   only (the connect controller owns the gateway, so nothing there can persist), so a gateway restart loses
-  it until the next `bin/setup` or `bin/gwmap`. `bin/gwmap --watch` re-applies it automatically (`--check` tests it). Aliases are numbered by
+  it until the next `bin/setup` or `bin/gwmap`. The jump host runs a watcher (`/root/gwmap.sh --watch 30`, log in `/var/log/gwwatch.log`) that re-applies it
+  within about 30 s and rewrites its own member list. It logs in with a service account `<fleet>-jump`
+  that `bin/jump` creates with the project `editor` role (the same grant the nodes' service accounts hold;
+  broad, see above), keeps its key in `/root/.datum/cred.json` and removes everything on `bin/jump --delete`
+  or a fleet-wide teardown. `GWWATCH=0` skips it. A jump container restart stops the watcher until the
+  next `bin/jump`. `bin/gwmap --watch` does the same from your terminal. Aliases are numbered by
   sorted node name, so a resize renumbers them.
 - The image is built by `jump/build.sh` (pushes `ghcr.io/drewr/datum-jump`, pinned by digest in
   `jump/IMAGE`; same pull secret as the viewer).
