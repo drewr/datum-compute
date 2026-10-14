@@ -61,8 +61,6 @@ const score = (key: string, label: string, d: string): string => `
     <figure class="stars" title="${label} score pending">${Array.from({ length: 5 }, () => `<span class="star">${icon(I.star, "off", 16)}${icon(I.starFill, "on", 16)}</span>`).join("")}<span class="sr-only" data-score-text>${label} score pending</span></figure>
   </li>`;
 
-const year = new Date().getFullYear();
-
 export const PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -366,13 +364,12 @@ ${FONTS}
 
   <footer class="page-footer">
     <div class="row">
-      <p>© ${year} Datum Technology, Inc.</p>
+      <p>Inspired by <a href="https://speed.cloudflare.com/">speed.cloudflare.com</a></p>
       <nav class="footer-menu" aria-label="Footer">
         <a href="https://www.datum.net/">Home</a>
         <a href="https://www.datum.net/locations">Locations</a>
         <a href="https://www.datum.net/legal/privacy">Privacy Policy</a>
         <a href="https://www.datum.net/legal/terms">Terms of Use</a>
-        <a href="https://github.com/drewr/datum-compute/tree/main/speed-test">Source</a>
       </nav>
     </div>
   </footer>
