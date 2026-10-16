@@ -1,0 +1,35 @@
+# The cluster's one workload: Caddy answering "Hello, world!" on port 80 of
+# each worker. It uses the host network because nothing else reaches a pod
+# from outside: the kernel has no IPv6 NAT, so there is no kube-proxy and no
+# Service routing. Two replicas and the anti-affinity put one on each worker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: hello }
+  template:
+    metadata:
+      labels: { app: hello }
+    spec:
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels: { app: hello }
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: caddy
+        image: docker.io/library/caddy:2.11.7-alpine
+        command: ["caddy", "respond", "--listen", ":80", "Hello, world!\n"]
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet: { path: /, port: 80 }
+        resources:
+          requests: { cpu: 50m, memory: 32Mi }
+          limits: { memory: 64Mi }

@@ -1,0 +1,55 @@
+# Two Kubernetes workers: unikernel instances running a kubelet that joins the
+# control plane with the bootstrap token in Secret k8s-join (image/node.sh,
+# ROLE=worker). deploy.sh fills in @IMAGE@, @PULL_SECRET@ and @CP_IP@, the
+# control plane's address.
+#
+# Port 80 is where the hello Deployment's Caddy listens (host network); the
+# NetworkService in k8s-http.yaml sends the HTTPS URL's traffic there.
+apiVersion: compute.datumapis.com/v1alpha
+kind: Workload
+metadata:
+  annotations:
+    k8s-demo/manifest: "@MANIFEST_SUM@"   # set by deploy.sh
+  name: k8s-worker
+  namespace: default
+spec:
+  placements:
+  - name: default
+    locations:
+    - name: us-central-1
+    scaleSettings:
+      minReplicas: 2
+  template:
+    spec:
+      networkInterfaces:
+      - name: eth0
+        ipFamilies: [IPv6]
+        network:
+          name: default
+        reclaimPolicy: Delete
+      runtime:
+        class: unikernel
+        resources:
+          instanceType: datumcloud-d1-standard-2
+        sandbox:
+          imagePullSecrets:
+          - name: @PULL_SECRET@
+          containers:
+          - name: node
+            image: @IMAGE@
+            env:
+            - name: ROLE
+              value: worker
+            - name: K8S_API
+              value: "@CP_IP@"
+            ports:
+            - name: http
+              port: 80
+              protocol: TCP
+            volumeAttachments:
+            - name: join
+              mountPath: /secrets/k8s-join
+      volumes:
+      - name: join
+        secret:
+          secretName: k8s-join
