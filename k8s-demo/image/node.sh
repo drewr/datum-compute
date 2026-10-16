@@ -231,6 +231,9 @@ wait_for 60 kubeadm init phase bootstrap-token --config $K/kubeadm.yaml --kubeco
 kubelet --kubeconfig=$K/kubelet.conf --register-with-taints=node-role.kubernetes.io/control-plane:NoSchedule
 wait_for 120 kubectl get node "$NODE" || die "the control plane's kubelet did not register: $(tail -5 $L/kubelet.log)"
 kubectl label node "$NODE" node-role.kubernetes.io/control-plane= --overwrite >/dev/null
+# Pods can't reach the API through its Service address (no kube-proxy), so
+# the add-ons read the real one from here.
+kubectl create configmap k8s-api --from-literal=address="$IP" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 log "control plane up"
 
 # Apply the add-ons, label new workers, and print the cluster when it changes.

@@ -3,8 +3,9 @@
 A 3-node Kubernetes cluster on Datum Compute's unikernel runtime class,
 built from the upstream binaries (kubeadm, kube-apiserver, kubelet,
 containerd, runc) with no distribution. The cluster's state is in SQLite,
-through kine. It runs one workload: Caddy answering "Hello, world!" at a
-Datum-managed HTTPS URL.
+through kine. It serves one page at a Datum-managed HTTPS URL: a live diagram
+of the cluster and each node's host and OS details, rendered in the cluster
+from the Kubernetes API.
 
 ```
 ./deploy.sh build    build the node image and push it (records image/IMAGE)
@@ -36,7 +37,8 @@ manifests/
   k8s-worker.yaml   # Workload: 2 workers
   k8s-http.yaml     # NetworkService + HTTPProxy: the URL, to the workers' port 80
 addons/
-  hello.yaml        # the Caddy Deployment; the control plane applies everything here
+  hello.yaml        # the page: a renderer and Caddy, one replica per worker
+  sysinfo.yaml      # DaemonSet: each node's host details, as a Node annotation
 ```
 
 ## How it fits together
@@ -75,11 +77,21 @@ browser ──HTTPS──▶ Datum proxy ──▶ k8s-worker-3 :80  (Caddy pod,
 - **No kube-proxy, no Services.** The kernel has no IPv6 NAT, so ClusterIPs
   can't work. Caddy uses the host network, and the URL's NetworkService sends
   traffic to port 80 on each worker. The Deployment's anti-affinity puts one
-  replica on each worker.
+  replica on each worker. Pods can't reach the API server through its Service
+  address either, so the control plane writes its real address to ConfigMap
+  `k8s-api`, and the add-ons read it from there.
+- **The page.** The `sysinfo` DaemonSet runs on every node, the control plane
+  included. Every 30 seconds it reads the instance's `/proc`, `/sys` and
+  `/etc/os-release` and stores them in its Node's `k8s-demo/sysinfo`
+  annotation. In each `hello` pod, a renderer reads the nodes and pods from
+  the API every 15 seconds and writes the page: an SVG diagram of the cluster
+  and a card per node. Caddy serves it. The scripts install `curl` and `jq`
+  with apk at start, so the pods need the network's outbound access.
 - **Add-ons.** ConfigMap `k8s-addons` holds `addons/`, mounted on the control
-  plane, which applies it every 30 seconds. The mount is read at boot, so `up`
-  counts the add-ons as part of the control plane's manifest: changing them
-  redeploys the control plane.
+  plane, which applies it every 30 seconds. The mount is read at boot and isn't
+  updated on a running instance, so `up` puts a hash of the add-ons in the
+  control plane's environment: editing them replaces the instance, which
+  starts a fresh cluster.
 - **The URL** comes from a NetworkService and an HTTPProxy applied by `up`,
   what `datumctl compute deploy --http-port` would create. A flag deploy drops
   `imagePullSecrets` ([compute#432](https://github.com/datum-cloud/compute/issues/432)),
@@ -153,6 +165,9 @@ every run.
   with a `GOMEMLIMIT`.
 - **Single control plane, no CoreDNS, no Services, no metrics.** Enough for one
   host-network workload; most charts would need ClusterIP Services.
+- **No DMI data.** The instances expose no `/sys/class/dmi` or
+  `/sys/hypervisor`, so the page can only say "virtual machine", from the
+  CPU's `hypervisor` flag.
 - **The keepalive is a workaround.** If the platform changes its suspension rule
   (for example, to suspend instances with idle connections, kraftlet's `idle`
   policy), it may stop working. The uptime lines show it.

@@ -1,0 +1,92 @@
+# An agent on every node, the control plane included, that records the
+# instance's host details (OS, kernel, machine, CPU, memory, load, uptime) in
+# its Node's k8s-demo/sysinfo annotation every 30 seconds. The hello page
+# shows them.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: sysinfo, namespace: default }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: k8s-demo-sysinfo }
+rules:
+- apiGroups: [""]
+  resources: [nodes]
+  verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: k8s-demo-sysinfo }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: k8s-demo-sysinfo }
+subjects: [{ kind: ServiceAccount, name: sysinfo, namespace: default }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: sysinfo, namespace: default }
+data:
+  collect.sh: |
+    #!/bin/sh
+    # Records this node's host details in its Node's k8s-demo/sysinfo annotation
+    # every 30 seconds. With the host network and the host's /etc mounted, /proc,
+    # /sys and os-release describe the instance itself.
+    until apk add --no-cache curl jq >/dev/null 2>&1; do echo "apk add failed; retrying"; sleep 5; done
+    T=/var/run/secrets/kubernetes.io/serviceaccount
+    api() { p=$1; shift; curl -gfsS --max-time 10 --cacert $T/ca.crt -H "Authorization: Bearer $(cat $T/token)" "https://[$K8S_API]:6443$p" "$@"; }
+    rd() { tr -d '\n' <"$1" 2>/dev/null; }
+    while true; do
+      # Debian's /etc/os-release is a link to ../usr/lib/os-release; resolve it
+      # inside the host mounts.
+      f=/host/etc/os-release
+      [ -L "$f" ] && f=/host/etc/$(readlink "$f")
+      os=$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null)
+      machine=$(echo "$(rd /sys/class/dmi/id/sys_vendor) $(rd /sys/class/dmi/id/product_name)" | sed 's/^ *//; s/ *$//')
+      [ -n "$machine" ] || machine=$(rd /sys/hypervisor/type)
+      [ -n "$machine" ] || ! grep -qw hypervisor /proc/cpuinfo || machine="virtual machine (no DMI data)"
+      cpu=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1)
+      info=$(jq -cn --arg os "$os" --arg machine "$machine" --arg cpu "$cpu" --argjson cpus "$(nproc)" \
+        --argjson mt "$(awk '/^MemTotal/ {print $2}' /proc/meminfo)" --argjson ma "$(awk '/^MemAvailable/ {print $2}' /proc/meminfo)" \
+        --arg load "$(cut -d' ' -f1-3 /proc/loadavg)" --argjson up "$(cut -d' ' -f1 /proc/uptime)" \
+        --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{os: $os, machine: $machine, cpu: $cpu, cpus: $cpus, memTotalKB: $mt, memAvailKB: $ma, load: $load, uptime: $up, at: $at}')
+      jq -cn --arg v "$info" '{metadata: {annotations: {"k8s-demo/sysinfo": $v}}}' |
+        api "/api/v1/nodes/$NODE_NAME" -X PATCH -H 'Content-Type: application/merge-patch+json' --data @- >/dev/null ||
+        echo "patch failed"
+      sleep 30
+    done
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sysinfo
+  namespace: default
+spec:
+  selector:
+    matchLabels: { app: sysinfo }
+  template:
+    metadata:
+      labels: { app: sysinfo }
+    spec:
+      serviceAccountName: sysinfo
+      hostNetwork: true
+      tolerations:
+      - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+      containers:
+      - name: collect
+        image: docker.io/library/alpine:3.22
+        command: ["/bin/sh", "/etc/sysinfo/collect.sh"]
+        env:
+        - name: NODE_NAME
+          valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+        - name: K8S_API
+          valueFrom: { configMapKeyRef: { name: k8s-api, key: address } }
+        volumeMounts:
+        - { name: host-etc, mountPath: /host/etc, readOnly: true }
+        - { name: host-usr-lib, mountPath: /host/usr/lib, readOnly: true }
+        - { name: scripts, mountPath: /etc/sysinfo }
+        resources:
+          requests: { cpu: 10m, memory: 16Mi }
+          limits: { memory: 48Mi }
+      volumes:
+      - { name: host-etc, hostPath: { path: /etc } }
+      - { name: host-usr-lib, hostPath: { path: /usr/lib } }
+      - { name: scripts, configMap: { name: sysinfo } }

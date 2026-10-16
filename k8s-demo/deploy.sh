@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A 3-node Kubernetes cluster (upstream binaries, no distribution) on Datum
-# Compute's unikernel class, serving one workload: Caddy saying hello.
+# Compute's unikernel class, serving one page: a live diagram of the cluster
+# and each node's host details.
 #
 #   ./deploy.sh build    build the node image and push it (records image/IMAGE)
 #   ./deploy.sh up       create or update the cluster and print its URL
@@ -134,14 +135,14 @@ cmd_up() {
   for i in $(seq 60); do u=$(url); [ -n "$u" ] && break; sleep 5; done
   [ -n "$u" ] || die "HTTPProxy k8s-hello has no hostname after 5 minutes"
 
-  say "waiting for https://$u to say hello (the cluster takes a few minutes to form)"
+  say "waiting for https://$u to serve the cluster page (the cluster takes a few minutes to form)"
   for i in $(seq 90); do
-    if body=$(curl -fsS --max-time 5 "https://$u/" 2>/dev/null) && grep -q Hello <<<"$body"; then
-      echo "$body"; say "up: https://$u"; return
+    if body=$(curl -fsS --max-time 5 "https://$u/" 2>/dev/null) && grep -q 'content="cluster page"' <<<"$body"; then
+      sed -n 's/.*<p class="sub">\(.*\)<\/p>.*/\1/p' <<<"$body"; say "up: https://$u"; return
     fi
     sleep 10
   done
-  die "no hello from https://$u after 15 minutes; see ./deploy.sh status"
+  die "no cluster page from https://$u after 15 minutes; see ./deploy.sh status"
 }
 
 cmd_status() {

@@ -40,6 +40,11 @@ spec:
             env:
             - name: ROLE
               value: cp
+            # Covers the add-ons too. The instance reads their mount once, at
+            # boot, and only a template change replaces it, so this is what
+            # makes an add-on edit take effect.
+            - name: MANIFEST_SUM
+              value: "@MANIFEST_SUM@"
             ports:
             - name: apiserver
               port: 6443
