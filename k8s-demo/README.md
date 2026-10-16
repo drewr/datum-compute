@@ -1,9 +1,10 @@
 # Kubernetes on Datum unikernels
 
 A 3-node Kubernetes cluster on Datum Compute's unikernel runtime class,
-built from the upstream binaries (kubeadm, kube-apiserver, kubelet, etcd,
-containerd, runc) with no distribution. It runs one workload: Caddy answering
-"Hello, world!" at a Datum-managed HTTPS URL.
+built from the upstream binaries (kubeadm, kube-apiserver, kubelet,
+containerd, runc) with no distribution. The cluster's state is in SQLite,
+through kine. It runs one workload: Caddy answering "Hello, world!" at a
+Datum-managed HTTPS URL.
 
 ```
 ./deploy.sh build    build the node image and push it (records image/IMAGE)
@@ -45,7 +46,7 @@ browser ──HTTPS──▶ Datum proxy ──▶ k8s-worker-3 :80  (Caddy pod,
                                   k8s-worker-4 :80
                                         │ kubelet
                                         ▼
-                                  k8s-cp :6443  etcd, kube-apiserver, kube-controller-manager,
+                                  k8s-cp :6443  kine (SQLite), kube-apiserver, kube-controller-manager,
                                                 kube-scheduler, kubelet (tainted NoSchedule)
 ```
 
@@ -57,6 +58,10 @@ browser ──HTTPS──▶ Datum proxy ──▶ k8s-worker-3 :80  (Caddy pod,
   `k8s-join` (CA certificate and token, every node). The control plane runs
   `kubeadm init phase certs`, `kubeconfig` and `bootstrap-token` against that
   CA, then starts each component by hand.
+- **Storage.** kube-apiserver only speaks the etcd v3 API, so the control plane
+  runs [kine](https://github.com/k3s-io/kine), the shim k3s uses: it serves
+  that API on 127.0.0.1:2379 and keeps the data in `/var/lib/kine/state.db`.
+  One process and one file, no raft.
 - **Joining.** Workers use standard TLS bootstrapping: the token gets their CSR
   approved and the kubelet keeps the certificate. They find the API server by
   `K8S_API`, the control plane's address, which `reclaimPolicy: Retain` keeps
@@ -106,7 +111,7 @@ What `node.sh` has to do because of that:
 
 | Without it | Fix in node.sh |
 |---|---|
-| etcd unreachable on 127.0.0.1 | bring up `lo`; the instance boots with loopback down |
+| the datastore unreachable on 127.0.0.1 | bring up `lo`; the instance boots with loopback down |
 | kubeadm rejects the node name `(none)` | set a hostname |
 | containerd can't mount any image (`not supported as upperdir`) | tmpfs at `/var/lib/containerd` |
 | DNS and image pulls fail once forwarding is on | re-add the default route; enabling forwarding drops the one learned from router advertisements |
@@ -120,7 +125,7 @@ Unikernel instances are suspended after one second without traffic. That's
 kraftlet's scale-to-zero, a platform setting
 (`scaleToZeroPolicy`/`scaleToZeroCooldownMS` in the unikraft provider's config),
 not something a workload can turn off. Nothing runs while an instance is
-suspended: not etcd, not the kubelet. A worker's kernel uptime advanced 85
+suspended: not the datastore, not the kubelet. A worker's kernel uptime advanced 85
 seconds over 9 minutes of wall time. Long-lived kubelet connections to the API
 server didn't prevent it.
 
@@ -133,8 +138,8 @@ every run.
 
 ## Caveats
 
-- **A control plane restart wipes the cluster.** etcd lives on the instance and
-  there's no durable disk. The new control plane re-creates the bootstrap token
+- **A control plane restart wipes the cluster.** The SQLite file lives on the
+  instance and there's no durable disk. The new control plane re-creates the bootstrap token
   and the add-ons. Each worker's kubelet keeps its certificate but doesn't
   register again on its own, so `node.sh` restarts it once its Node has been
   missing for two minutes. Measured: the cluster was whole again about 5

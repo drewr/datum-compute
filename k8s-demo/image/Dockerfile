@@ -6,7 +6,8 @@
 # The base is glibc (Debian): the upstream kubelet is dynamically linked.
 FROM docker.io/library/debian:trixie-slim AS fetch
 ARG K8S=v1.37.1
-ARG ETCD=v3.7.2
+ARG KINE=v0.17.2
+ARG KINE_SHA256=7c41cf189ecf21660bda78f1d35cc0d188c103d1809933523a8c7dde2cc58c1e
 ARG CONTAINERD=2.4.2
 ARG RUNC=v1.5.2
 ARG CNI=v1.9.1
@@ -14,8 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 WORKDIR /out
 RUN for b in kubeadm kube-apiserver kube-controller-manager kube-scheduler kubelet kubectl; do \
       curl -fsSLo $b https://dl.k8s.io/release/$K8S/bin/linux/amd64/$b && chmod 755 $b; done
-RUN curl -fsSL https://github.com/etcd-io/etcd/releases/download/$ETCD/etcd-$ETCD-linux-amd64.tar.gz \
-      | tar xz --strip-components=1 etcd-$ETCD-linux-amd64/etcd etcd-$ETCD-linux-amd64/etcdctl
+# kine serves the etcd v3 API from SQLite; the apiserver speaks only etcd.
+RUN curl -fsSLo kine https://github.com/k3s-io/kine/releases/download/$KINE/kine-amd64 \
+    && echo "$KINE_SHA256  kine" | sha256sum -c - && chmod 755 kine
 RUN curl -fsSL https://github.com/containerd/containerd/releases/download/v$CONTAINERD/containerd-static-$CONTAINERD-linux-amd64.tar.gz \
       | tar xz --strip-components=1 bin/containerd bin/containerd-shim-runc-v2 bin/ctr
 RUN curl -fsSLo runc https://github.com/opencontainers/runc/releases/download/$RUNC/runc.amd64 && chmod 755 runc

@@ -85,12 +85,13 @@ if out=$(sh -c 'echo 2 >/proc/sys/net/ipv6/conf/eth0/accept_ra && echo 1 >/proc/
   ok "ipv6 forwarding+proxy_ndp" "default route: $(ip -6 route show default | head -1)"
 else bad "ipv6 forwarding+proxy_ndp" "$out"; fi
 
-log "## etcd"
-GOMEMLIMIT=200MiB etcd --quota-backend-bytes=268435456 --data-dir /var/lib/etcd --listen-client-urls http://127.0.0.1:2379 \
-  --advertise-client-urls http://127.0.0.1:2379 --listen-peer-urls http://127.0.0.1:2380 \
-  >/var/log/k8s/etcd.log 2>&1 &
-if wait_for 60 etcdctl --endpoints http://127.0.0.1:2379 endpoint health; then ETCD=1; ok etcd
-else bad etcd "$(etcdctl --endpoints http://127.0.0.1:2379 endpoint health 2>&1 | tail -2 | tr '\n' ' ')"; tailf /var/log/k8s/etcd.log 5; fi
+log "## kine (etcd API over SQLite)"
+mkdir -p /var/lib/kine
+GOMEMLIMIT=200MiB kine --endpoint "sqlite:///var/lib/kine/state.db?_journal=WAL&cache=shared" \
+  --listen-address 127.0.0.1:2379 >/var/log/k8s/kine.log 2>&1 &
+kine_up() { curl -s -o /dev/null -m 2 --http2-prior-knowledge http://127.0.0.1:2379/; r=$?; [ $r -ne 7 ] && [ $r -ne 28 ]; }
+if wait_for 60 kine_up; then ETCD=1; ok kine
+else bad kine; tailf /var/log/k8s/kine.log 5; fi
 
 log "## certificates (kubeadm init phase)"
 cat >/etc/kubeadm.yaml <<EOF

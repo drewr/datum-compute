@@ -1,7 +1,7 @@
 #!/bin/sh
 # A Kubernetes node on a Datum unikernel instance, from upstream binaries.
 #
-#   ROLE=cp      etcd, kube-apiserver, kube-controller-manager, kube-scheduler,
+#   ROLE=cp      kine (SQLite), kube-apiserver, kube-controller-manager, kube-scheduler,
 #                and a kubelet tainted NoSchedule. Applies every manifest in
 #                /etc/k8s/addons every 30s.
 #   ROLE=worker  a kubelet that joins K8S_API with a bootstrap token.
@@ -48,7 +48,7 @@ log "role $ROLE, node $NODE, address $IP, pods $BASE:1:0/112"
 
 # Unikernel instances are suspended after 1s without traffic (kraftlet's
 # scale-to-zero, a platform setting), and nothing runs while one is
-# suspended: not etcd, not the kubelet. So every node echoes on port 7946 and
+# suspended: not kine, not the kubelet. So every node echoes on port 7946 and
 # keeps a connection to each peer with a byte every half second. Workers start
 # with the control plane as their peer; every node adds whoever connects to
 # it, so the control plane finds the workers (and finds them again after a
@@ -143,7 +143,7 @@ EOF
   # Report the first kubelet failures; the node's state shows on the control plane.
   tail -F $L/kubelet.log 2>/dev/null | grep --line-buffered -E '^E[0-9]{4}' 2>/dev/null | head -20 | sed 's/^/k8s-node: kubelet: /' &
 
-  # A restarted control plane is an empty cluster (etcd lives on its
+  # A restarted control plane is an empty cluster (its SQLite file lives on its
   # instance). The kubelet keeps its certificate but doesn't register again,
   # so restart it when its Node has been missing for two minutes, or when it
   # still has no certificate after two minutes.
@@ -197,11 +197,15 @@ kubeadm init phase certs all --config $K/kubeadm.yaml >$L/kubeadm.log 2>&1 &&
   kubeadm init phase kubeconfig all --config $K/kubeadm.yaml >>$L/kubeadm.log 2>&1 ||
   die "kubeadm: $(tail -3 $L/kubeadm.log)"
 
-# etcd keeps its data on the instance; a new instance starts an empty cluster.
-GOMEMLIMIT=200MiB etcd --data-dir /var/lib/etcd --quota-backend-bytes=268435456 \
-  --listen-client-urls http://127.0.0.1:2379 --advertise-client-urls http://127.0.0.1:2379 \
-  --listen-peer-urls http://127.0.0.1:2380 >$L/etcd.log 2>&1 &
-wait_for 60 etcdctl --endpoints http://127.0.0.1:2379 endpoint health || die "etcd: $(tail -3 $L/etcd.log)"
+# kine serves the etcd v3 API (the only storage kube-apiserver speaks) from a
+# SQLite file. The file lives on the instance; a new instance starts an empty
+# cluster.
+mkdir -p /var/lib/kine
+GOMEMLIMIT=200MiB kine --endpoint "sqlite:///var/lib/kine/state.db?_journal=WAL&cache=shared" \
+  --listen-address 127.0.0.1:2379 >$L/kine.log 2>&1 &
+# kine_up: anything answering on 2379 counts; curl exits 7 when refused, 28 on timeout.
+kine_up() { curl -s -o /dev/null -m 2 --http2-prior-knowledge http://127.0.0.1:2379/; r=$?; [ $r -ne 7 ] && [ $r -ne 28 ]; }
+wait_for 60 kine_up || die "kine: $(tail -3 $L/kine.log)"
 
 GOMEMLIMIT=600MiB kube-apiserver --etcd-servers=http://127.0.0.1:2379 --advertise-address="$IP" \
   --bind-address=:: --secure-port=6443 --service-cluster-ip-range=$SERVICE_CIDR \
