@@ -72,11 +72,11 @@ data:
 
     # --- the diagram -------------------------------------------------------------
     | ([
-        "<svg viewBox=\"0 0 \($W) 540\" role=\"img\" aria-label=\"Cluster architecture\">",
+        "<svg viewBox=\"0 0 \($W) 566\" role=\"img\" aria-label=\"Cluster architecture\">",
         "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" class=\"arrowhead\"/></marker></defs>",
         # the VPC
-        "<rect x=\"20\" y=\"118\" width=\"\($W - 40)\" height=\"400\" rx=\"14\" class=\"vpc\"/>",
-        text(36; 510; "label"; "Datum VPC · private IPv6 · unikernel instances (1 vCPU, 2 GiB)"),
+        "<rect x=\"20\" y=\"118\" width=\"\($W - 40)\" height=\"424\" rx=\"14\" class=\"vpc\"/>",
+        text(36; 534; "label"; "Datum VPC · private IPv6 · unikernel instances (1 vCPU, 2 GiB)"),
         # the edge
         "<rect x=\"\($mid - 190)\" y=\"24\" width=\"380\" height=\"58\" rx=\"10\" class=\"box edge\"/>",
         text($mid - 172; 48; "title"; "Datum edge"),
@@ -86,24 +86,25 @@ data:
           | (40 + ($i + 0.5) * ($W - 80) / $n) as $cx
           | ($mid + ($i - ($n - 1) / 2) * 90) as $tx
           | "<path d=\"M\($mid),82 C\($mid),120 \($cx),110 \($cx),164\" class=\"link http\" marker-end=\"url(#arrow)\"/>",
-            "<path d=\"M\($cx - 8),284 C\($cx - 8),320 \($tx - 8),320 \($tx - 8),358\" class=\"link api\" marker-end=\"url(#arrow)\"/>",
-            "<path d=\"M\($cx + 8),284 C\($cx + 8),320 \($tx + 8),320 \($tx + 8),358\" class=\"link keep\"/>"),
+            "<path d=\"M\($cx - 8),304 C\($cx - 8),334 \($tx - 8),320 \($tx - 8),358\" class=\"link api\" marker-end=\"url(#arrow)\"/>",
+            "<path d=\"M\($cx + 8),304 C\($cx + 8),334 \($tx + 8),320 \($tx + 8),358\" class=\"link keep\"/>"),
         # worker boxes
         ($ws | to_entries[] | .key as $i | .value as $w
           | (40 + ($i + 0.5) * ($W - 80) / $n - $bw / 2) as $x
           | ($w.metadata.name) as $name
           | ([$pods[] | select(.spec.nodeName == $name)] | length) as $np
-          | "<rect x=\"\($x)\" y=\"164\" width=\"\($bw)\" height=\"120\" rx=\"10\" class=\"box worker\(if $name == $served then " served" else "" end)\"/>",
+          | "<rect x=\"\($x)\" y=\"164\" width=\"\($bw)\" height=\"140\" rx=\"10\" class=\"box worker\(if $name == $served then " served" else "" end)\"/>",
             "<circle cx=\"\($x + $bw - 18)\" cy=\"184\" r=\"5\" class=\"dot \(if ($w | ready) == "True" then "ok" else "bad" end)\"/>",
             text($x + 16; 188; "title"; $name),
             text($x + 16; 208; "mono"; $w | addr),
-            text($x + 16; 232; "small"; "Caddy :80 · host network"),
-            text($x + 16; 252; "small"; "kubelet · containerd · runc"),
-            text($x + 16; 272; "small"; "\($np) pod\(if $np == 1 then "" else "s" end)\(if $name == $served then " · serving this page" else "" end)")),
+            text($x + 16; 232; "small"; "page: renderer + Caddy :80"),
+            text($x + 16; 251; "small"; "sysinfo agent → Node annotation"),
+            text($x + 16; 270; "small"; "kubelet · containerd · runc"),
+            text($x + 16; 292; "small"; "\($np) pod\(if $np == 1 then "" else "s" end)\(if $name == $served then " · serving this page" else "" end)")),
         # the control plane
         ($cps[0] // null | if . == null then text($mid - 120; 420; "small"; "no control plane node registered") else
           . as $c
-          | "<rect x=\"\($mid - 300)\" y=\"358\" width=\"600\" height=\"140\" rx=\"10\" class=\"box cp\"/>",
+          | "<rect x=\"\($mid - 300)\" y=\"358\" width=\"600\" height=\"160\" rx=\"10\" class=\"box cp\"/>",
             "<circle cx=\"\($mid + 282)\" cy=\"378\" r=\"5\" class=\"dot \(if ($c | ready) == "True" then "ok" else "bad" end)\"/>",
             text($mid - 284; 382; "title"; "\($c.metadata.name) · control plane"),
             text($mid - 284; 402; "mono"; $c | addr),
@@ -112,12 +113,13 @@ data:
             text($mid - 284; 470; "small"; "kube-controller-manager · kube-scheduler"),
             text($mid + 20; 430; "small"; "kubelet (tainted NoSchedule)"),
             text($mid + 20; 450; "small"; "containerd · runc"),
-            text($mid + 20; 470; "small"; "applies add-ons every 30 s")
+            text($mid + 20; 470; "small"; "sysinfo agent → Node annotation"),
+            text($mid - 284; 494; "small"; "applies add-ons every 30 s · publishes its address (ConfigMap k8s-api)")
           end),
         # legend
-        "<path d=\"M40,530 h28\" class=\"link http\"/>", text(74; 534; "small"; "HTTP"),
-        "<path d=\"M130,530 h28\" class=\"link api\"/>", text(164; 534; "small"; "kubelet → API server"),
-        "<path d=\"M320,530 h28\" class=\"link keep\"/>", text(354; 534; "small"; "keepalive :7946 (holds off idle suspension)"),
+        "<path d=\"M40,556 h28\" class=\"link http\"/>", text(74; 560; "small"; "HTTP"),
+        "<path d=\"M130,556 h28\" class=\"link api\"/>", text(164; 560; "small"; "kubelet, renderer, sysinfo agent → API server"),
+        "<path d=\"M470,556 h28\" class=\"link keep\"/>", text(504; 560; "small"; "keepalive :7946 (holds off idle suspension)"),
         "</svg>"
       ] | join("\n")) as $svg
 
