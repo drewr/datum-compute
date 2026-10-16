@@ -1,0 +1,259 @@
+# The cluster's one workload: a page with a live diagram of the cluster and
+# each node's host details, on port 80 of each worker. A renderer reads the
+# Kubernetes API every 15 seconds and writes the page; Caddy serves it.
+#
+# It uses the host network because nothing else reaches a pod from outside:
+# the kernel has no IPv6 NAT, so there is no kube-proxy and no Service
+# routing. Two replicas and the anti-affinity put one on each worker.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: hello, namespace: default }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: k8s-demo-hello }
+rules:
+- apiGroups: [""]
+  resources: [nodes, pods]
+  verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: k8s-demo-hello }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: k8s-demo-hello }
+subjects: [{ kind: ServiceAccount, name: hello, namespace: default }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hello, namespace: default }
+data:
+  render.sh: |
+    #!/bin/sh
+    # Renders /srv/index.html from the Kubernetes API every 15 seconds; the
+    # caddy container serves it. K8S_API comes from ConfigMap k8s-api, which the
+    # control plane writes: pods can't reach the API through its Service address,
+    # since there's no kube-proxy.
+    until apk add --no-cache curl jq >/dev/null 2>&1; do echo "apk add failed; retrying"; sleep 5; done
+    T=/var/run/secrets/kubernetes.io/serviceaccount
+    api() { curl -gfsS --max-time 10 --cacert $T/ca.crt -H "Authorization: Bearer $(cat $T/token)" "https://[$K8S_API]:6443$1"; }
+    echo '<!doctype html><meta http-equiv="refresh" content="5"><p>Starting...</p>' >/srv/index.html
+    while true; do
+      if api /api/v1/nodes >/tmp/nodes.json && api /api/v1/pods >/tmp/pods.json &&
+         jq -n -r --slurpfile nodes /tmp/nodes.json --slurpfile pods /tmp/pods.json --arg served "$NODE_NAME" \
+           --arg now "$(date -u '+%Y-%m-%d %H:%M:%S')" -f /etc/hello/render.jq >/srv/index.tmp; then
+        mv /srv/index.tmp /srv/index.html
+      else
+        echo "render failed"
+      fi
+      sleep 15
+    done
+  render.jq: |
+    # Renders the cluster page from $nodes[0] and $pods[0] (API lists), $served
+    # (the node serving the page) and $now.
+    def esc: tostring | @html;
+    def isCP: (.metadata.labels // {}) | has("node-role.kubernetes.io/control-plane");
+    def ready: ([.status.conditions[]? | select(.type == "Ready") | .status] | first) // "Unknown";
+    def addr: ([.status.addresses[]? | select(.type == "InternalIP") | .address] | first) // "";
+    def sys: ((.metadata.annotations // {})["k8s-demo/sysinfo"] // "{}") | (try fromjson catch {});
+    def gib: ((. / 1048576 * 10) | round) / 10 | "\(.) GiB";
+    def capKiB: (.status.capacity.memory // "0Ki") | if endswith("Ki") then rtrimstr("Ki") | tonumber else tonumber / 1024 end;
+    def dur: floor as $s | ($s / 86400 | floor) as $d | (($s % 86400) / 3600 | floor) as $h | (($s % 3600) / 60 | floor) as $m
+      | if $d > 0 then "\($d)d \($h)h" elif $h > 0 then "\($h)h \($m)m" else "\($m)m \($s % 60)s" end;
+    def text($x; $y; $cls; $s): "<text x=\"\($x)\" y=\"\($y)\" class=\"\($cls)\">\($s | esc)</text>";
+
+    ($nodes[0].items // []) as $all
+    | ($pods[0].items // []) as $pods
+    | ([$all[] | select(isCP)] | sort_by(.metadata.name)) as $cps
+    | ([$all[] | select(isCP | not)] | sort_by(.metadata.name)) as $ws
+    | ($ws | length) as $n
+    | 960 as $W
+    | (if $n > 0 then ([260, (($W - 80) / $n - 30)] | min) else 260 end) as $bw
+    | ($W / 2) as $mid
+
+    # --- the diagram -------------------------------------------------------------
+    | ([
+        "<svg viewBox=\"0 0 \($W) 566\" role=\"img\" aria-label=\"Cluster architecture\">",
+        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" class=\"arrowhead\"/></marker></defs>",
+        # the VPC
+        "<rect x=\"20\" y=\"118\" width=\"\($W - 40)\" height=\"424\" rx=\"14\" class=\"vpc\"/>",
+        text(36; 534; "label"; "Datum VPC · private IPv6 · unikernel instances (1 vCPU, 2 GiB)"),
+        # the edge
+        "<rect x=\"\($mid - 190)\" y=\"24\" width=\"380\" height=\"58\" rx=\"10\" class=\"box edge\"/>",
+        text($mid - 172; 48; "title"; "Datum edge"),
+        text($mid - 172; 68; "mono"; "HTTPS URL → workers' port 80"),
+        # edge → workers, workers → control plane
+        ($ws | to_entries[] | .key as $i | .value as $w
+          | (40 + ($i + 0.5) * ($W - 80) / $n) as $cx
+          | ($mid + ($i - ($n - 1) / 2) * 90) as $tx
+          | "<path d=\"M\($mid),82 C\($mid),120 \($cx),110 \($cx),164\" class=\"link http\" marker-end=\"url(#arrow)\"/>",
+            "<path d=\"M\($cx - 8),304 C\($cx - 8),334 \($tx - 8),320 \($tx - 8),358\" class=\"link api\" marker-end=\"url(#arrow)\"/>",
+            "<path d=\"M\($cx + 8),304 C\($cx + 8),334 \($tx + 8),320 \($tx + 8),358\" class=\"link keep\"/>"),
+        # worker boxes
+        ($ws | to_entries[] | .key as $i | .value as $w
+          | (40 + ($i + 0.5) * ($W - 80) / $n - $bw / 2) as $x
+          | ($w.metadata.name) as $name
+          | ([$pods[] | select(.spec.nodeName == $name)] | length) as $np
+          | "<rect x=\"\($x)\" y=\"164\" width=\"\($bw)\" height=\"140\" rx=\"10\" class=\"box worker\(if $name == $served then " served" else "" end)\"/>",
+            "<circle cx=\"\($x + $bw - 18)\" cy=\"184\" r=\"5\" class=\"dot \(if ($w | ready) == "True" then "ok" else "bad" end)\"/>",
+            text($x + 16; 188; "title"; $name),
+            text($x + 16; 208; "mono"; $w | addr),
+            text($x + 16; 232; "small"; "page: renderer + Caddy :80"),
+            text($x + 16; 251; "small"; "sysinfo agent → Node annotation"),
+            text($x + 16; 270; "small"; "kubelet · containerd · runc"),
+            text($x + 16; 292; "small"; "\($np) pod\(if $np == 1 then "" else "s" end)\(if $name == $served then " · serving this page" else "" end)")),
+        # the control plane
+        ($cps[0] // null | if . == null then text($mid - 120; 420; "small"; "no control plane node registered") else
+          . as $c
+          | "<rect x=\"\($mid - 300)\" y=\"358\" width=\"600\" height=\"160\" rx=\"10\" class=\"box cp\"/>",
+            "<circle cx=\"\($mid + 282)\" cy=\"378\" r=\"5\" class=\"dot \(if ($c | ready) == "True" then "ok" else "bad" end)\"/>",
+            text($mid - 284; 382; "title"; "\($c.metadata.name) · control plane"),
+            text($mid - 284; 402; "mono"; $c | addr),
+            text($mid - 284; 430; "small"; "kube-apiserver :6443"),
+            text($mid - 284; 450; "small"; "kine → SQLite (etcd API)"),
+            text($mid - 284; 470; "small"; "kube-controller-manager · kube-scheduler"),
+            text($mid + 20; 430; "small"; "kubelet (tainted NoSchedule)"),
+            text($mid + 20; 450; "small"; "containerd · runc"),
+            text($mid + 20; 470; "small"; "sysinfo agent → Node annotation"),
+            text($mid - 284; 494; "small"; "applies add-ons every 30 s · publishes its address (ConfigMap k8s-api)")
+          end),
+        # legend
+        "<path d=\"M40,556 h28\" class=\"link http\"/>", text(74; 560; "small"; "HTTP"),
+        "<path d=\"M130,556 h28\" class=\"link api\"/>", text(164; 560; "small"; "kubelet, renderer, sysinfo agent → API server"),
+        "<path d=\"M470,556 h28\" class=\"link keep\"/>", text(504; 560; "small"; "keepalive :7946 (holds off idle suspension)"),
+        "</svg>"
+      ] | join("\n")) as $svg
+
+    # --- the node cards -------------------------------------------------------------
+    | ([($cps + $ws)[] | . as $nd | ($nd | sys) as $s | ($nd.metadata.name) as $name
+        | ($nd.status.nodeInfo // {}) as $ni
+        | [
+            ["Role", (if ($nd | isCP) then "control plane" else "worker" end)],
+            ["Ready", ($nd | ready)],
+            ["Address", ($nd | addr)],
+            ["OS", (if ($s.os // "") != "" then $s.os else ($ni.osImage // "") end)],
+            ["Kernel", "\($ni.kernelVersion // "") (\($ni.architecture // ""))"],
+            ["Machine", ($s.machine // "")],
+            ["CPU", "\($s.cpus // $nd.status.capacity.cpu // "")\(if $s.cpu then " × \($s.cpu)" else "" end)"],
+            ["Memory", (if $s.memAvailKB then "\($s.memAvailKB | gib) free of \(($s.memTotalKB // ($nd | capKiB)) | gib)" else ($nd | capKiB | gib) end)],
+            ["Load", ($s.load // "")],
+            ["Uptime", (if $s.uptime then ($s.uptime | dur) else "" end)],
+            ["Runtime", ($ni.containerRuntimeVersion // "")],
+            ["Kubelet", ($ni.kubeletVersion // "")],
+            ["Pods", ([$pods[] | select(.spec.nodeName == $name) | "\(.metadata.name) (\(.status.phase))"] | join(", "))],
+            ["Reported", ($s.at // "no sysinfo yet")]
+          ]
+        | "<section class=\"card\(if $name == $served then " served" else "" end)\"><h2>\($name | esc)</h2><dl>"
+          + (map(select(.[1] != "")) | map("<dt>\(.[0] | esc)</dt><dd>\(.[1] | esc)</dd>") | join(""))
+          + "</dl></section>"
+      ] | join("\n")) as $cards
+
+    | "<!doctype html>
+    <html lang=\"en\">
+    <head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <meta name=\"k8s-demo\" content=\"cluster page\">
+    <meta http-equiv=\"refresh\" content=\"15\">
+    <title>Kubernetes on Datum unikernels</title>
+    <style>
+    :root { --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1d1b; --muted: #6b6b66; --line: #c9c9c2;
+            --accent: #2f6fdb; --edge: #eef3fc; --cp: #f4effa; --ok: #2e9e5b; --bad: #d64545; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #151514; --panel: #1f1f1d; --fg: #ecece8; --muted: #a2a29b; --line: #4a4a45;
+              --accent: #7aa7ff; --edge: #1d2638; --cp: #2a2236; --ok: #4cc27f; --bad: #ff6b6b; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+    main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 40px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    figure { margin: 0 0 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px; }
+    svg { width: 100%; height: auto; display: block; }
+    svg text { fill: var(--fg); font-family: system-ui, sans-serif; }
+    svg .title { font-weight: 600; font-size: 15px; }
+    svg .mono { font: 12px ui-monospace, monospace; fill: var(--muted); }
+    svg .small { font-size: 12.5px; }
+    svg .label { font-size: 12.5px; fill: var(--muted); }
+    .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+    .edge { fill: var(--edge); } .cp { fill: var(--cp); }
+    .served { stroke: var(--accent); stroke-width: 2.5; }
+    .vpc { fill: none; stroke: var(--line); stroke-dasharray: 6 5; }
+    .link { fill: none; stroke-width: 1.8; }
+    .http { stroke: var(--accent); } .api { stroke: var(--fg); } .keep { stroke: var(--muted); stroke-dasharray: 3 4; }
+    .arrowhead { fill: var(--fg); }
+    .dot.ok { fill: var(--ok); } .dot.bad { fill: var(--bad); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+    .card.served { border-color: var(--accent); }
+    .card h2 { font-size: 16px; margin: 0 0 10px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 13.5px; }
+    dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+    footer { color: var(--muted); font-size: 13px; margin-top: 24px; }
+    </style>
+    </head>
+    <body>
+    <main>
+    <h1>Kubernetes on Datum unikernels</h1>
+    <p class=\"sub\">\($all | length) nodes, \($pods | length) pods · served by \($served | esc) at \($now | esc) UTC · refreshes every 15 s</p>
+    <figure>
+    \($svg)
+    </figure>
+    <div class=\"cards\">
+    \($cards)
+    </div>
+    <footer>Rendered in the cluster by the hello Deployment from the Kubernetes API. Each node's host details come from its sysinfo agent, which reads the instance's /proc, /sys and /etc/os-release.</footer>
+    </main>
+    </body>
+    </html>"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: hello }
+  template:
+    metadata:
+      labels: { app: hello }
+    spec:
+      serviceAccountName: hello
+      hostNetwork: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels: { app: hello }
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: render
+        image: docker.io/library/alpine:3.22
+        command: ["/bin/sh", "/etc/hello/render.sh"]
+        env:
+        - name: NODE_NAME
+          valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+        - name: K8S_API
+          valueFrom: { configMapKeyRef: { name: k8s-api, key: address } }
+        volumeMounts:
+        - { name: srv, mountPath: /srv }
+        - { name: scripts, mountPath: /etc/hello }
+        resources:
+          requests: { cpu: 20m, memory: 32Mi }
+          limits: { memory: 64Mi }
+      - name: caddy
+        image: docker.io/library/caddy:2.11.7-alpine
+        command: ["caddy", "file-server", "--root", "/srv", "--listen", ":80"]
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet: { path: /, port: 80 }
+        volumeMounts:
+        - { name: srv, mountPath: /srv, readOnly: true }
+        resources:
+          requests: { cpu: 30m, memory: 32Mi }
+          limits: { memory: 64Mi }
+      volumes:
+      - { name: srv, emptyDir: {} }
+      - { name: scripts, configMap: { name: hello } }

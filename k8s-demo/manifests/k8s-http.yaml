@@ -1,0 +1,37 @@
+# A Datum-managed HTTPS URL for the workers' port 80. This is what
+# `datumctl compute deploy --http-port` creates; it's applied separately
+# because a flag deploy drops imagePullSecrets
+# (https://github.com/datum-cloud/compute/issues/432).
+apiVersion: networking.datumapis.com/v1alpha
+kind: NetworkService
+metadata:
+  name: k8s-hello
+  namespace: default
+spec:
+  networkInterfaces:
+    selector:
+      matchLabels:
+        compute.datumapis.com/workload-name: k8s-worker
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+  trafficDistribution:
+    strategy: Nearest
+---
+apiVersion: networking.datumapis.com/v1alpha
+kind: HTTPProxy
+metadata:
+  name: k8s-hello
+  namespace: default
+spec:
+  rules:
+  - backends:
+    - networkService:
+        name: k8s-hello
+        port: http
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
